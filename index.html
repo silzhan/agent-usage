@@ -97,6 +97,10 @@
     <button class="iconbtn" id="refreshBtn" title="立即刷新">⟳ 刷新</button>
     <button class="iconbtn" id="autoBtn" title="切换自动刷新">⏱ <span id="autoLabel">30s</span></button>
   </div>
+  <span class="gran" id="dim">
+    <button data-d="src" class="active">按来源</button>
+    <button data-d="model">按模型</button>
+  </span>
   <button class="rangebtn" id="rangeBtn">📅 <span id="rangeLabel">…</span></button>
   <span id="status"></span>
 </div>
@@ -151,12 +155,28 @@ const COLOR_HEX = {
 };
 const PALETTE = ['#4f8ef7','#3ecf8e','#f7b84f','#b48ef7','#e85c8a','#5cc8e8','#9fef4f','#ef9f4f'];
 const colorOf = (key, idx) => COLOR_HEX[key] || PALETTE[idx % PALETTE.length];
+
+// Must stay behaviourally identical to NormModel in collect.ps1 and norm_model() in
+// collect-ccswitch.py. Lowercasing first is what makes PS's case-insensitive -replace and
+// JS's case-sensitive replace agree; [0-9] not \d because PS \d also matches Unicode digits.
+const MODEL_DATE_RE = /(-[a-z]{1,4})?-[0-9]{4,8}$/i;
+function normModel(s){
+  let t = String(s == null ? '' : s).trim().toLowerCase();
+  if (!t || t === '<synthetic>') return 'unknown';
+  const i = t.lastIndexOf('/'); if (i >= 0) t = t.slice(i + 1);
+  t = t.replace(MODEL_DATE_RE, '');
+  t = t.replace(/[-_.]+$/, '');
+  return (!t || t === '<synthetic>') ? 'unknown' : t;
+}
+// 其他 makes it exactly PALETTE.length segments, so no model shares a colour
+const MODEL_TOPN = PALETTE.length - 1;
 const fmtN = n => n >= 1e9 ? (n/1e9).toFixed(2)+'B'
                : n >= 1e6 ? (n/1e6).toFixed(1)+'M'
                : n >= 1e3 ? (n/1e3).toFixed(1)+'K' : String(n);
 
 let DATA = null;
 let GRAN = 'day';
+let DIM  = 'src';       // 'src' = one series per source, 'model' = one series per model
 let APP = 'all';        // app tab filter: 'all' | app family
 let FROM = '';          // '' = default (last 30 days of data)
 let TO   = '';
@@ -198,7 +218,84 @@ function appOf(r){
   return 'Qoder CLI';
 }
 function roots(){ return DATA ? (DATA.roots||[]) : []; }
-function rootsFiltered(){ const rs = roots(); return APP==='all' ? rs : rs.filter(r=>appOf(r)===APP); }
+
+// Merge every visible source's per-day byModel map into one pseudo-root per model, so the
+// existing cards / stacked chart / legend / table render the model dimension unchanged.
+function buildModelRoots(src, rng){
+  const acc = {};
+  src.forEach(r => (r.days||[]).forEach(d => {
+    if (d.day < rng[0] || d.day > rng[1]) return;
+    const bm = d.byModel;
+    // a cache.json written by an older collector has no byModel; a truncated one may hold a
+    // string here, and Object.entries() on a string would yield one "model" per character
+    if (!bm || typeof bm !== 'object') return;
+    Object.keys(bm).forEach(raw => {
+      const v = bm[raw] || {};
+      const model = normModel(raw);
+      const a = acc[model] || (acc[model] = {req:0,in:0,out:0,cost:0,costSeen:false,days:{},reals:{}});
+      const t = a.days[d.day] || (a.days[d.day] = {req:0,in:0,out:0,cost:0,costSeen:false});
+      t.req += v.requests||0; t.in += v.inTokens||0; t.out += v.outTokens||0;
+      a.req += v.requests||0; a.in += v.inTokens||0; a.out += v.outTokens||0;
+      // accumulate on both the day and the model: the legend/card reads the model total, and
+      // forgetting it here silently paints "$0" because costSeen is still set
+      if (typeof v.costUsd === 'number') {
+        t.cost += v.costUsd; t.costSeen = true;
+        a.cost += v.costUsd; a.costSeen = true;
+      }
+      a.reals[r.real === true ? 'real' : 'est'] = true;
+    });
+  }));
+  const list = Object.keys(acc).map(k => ({model:k, a:acc[k]}));
+  // explicit key tie-break: rootsFiltered() runs several times per render and the table,
+  // legend and chart must agree on which model is the 7th
+  list.sort((x,y) => (y.a.in - x.a.in) || (x.model < y.model ? -1 : x.model > y.model ? 1 : 0));
+  const keep = list.slice(0, MODEL_TOPN), rest = list.slice(MODEL_TOPN);
+  if (rest.length) {
+    const m = {req:0,in:0,out:0,cost:0,costSeen:false,days:{},reals:{}};
+    rest.forEach(x => {
+      const a = x.a;
+      m.req += a.req; m.in += a.in; m.out += a.out; m.cost += a.cost;
+      if (a.costSeen) m.costSeen = true;
+      if (a.reals.real) m.reals.real = true;
+      if (a.reals.est)  m.reals.est = true;
+      Object.keys(a.days).forEach(day => {
+        const t = m.days[day] || (m.days[day] = {req:0,in:0,out:0,cost:0,costSeen:false});
+        const s = a.days[day];
+        t.req += s.req; t.in += s.in; t.out += s.out;
+        if (s.costSeen) { t.cost += s.cost; t.costSeen = true; }
+      });
+    });
+    keep.push({model:'其他', a:m});
+  }
+  const r2 = v => Math.round(v*100)/100;
+  return keep.map(x => ({
+    key: 'm:' + x.model, label: x.model,
+    kind: x.a.reals.real && x.a.reals.est ? '混合' : (x.a.reals.real ? '真实值' : '估算'),
+    real: !!x.a.reals.real && !x.a.reals.est,
+    sessions: null,
+    costUsd: x.a.costSeen ? r2(x.a.cost) : null,   // null, not 0, so the legend hides the $
+    days: Object.keys(x.a.days).sort().map(day => {
+      const s = x.a.days[day];
+      const o = {day, requests:s.req, inTokens:s.in, outTokens:s.out};
+      if (s.costSeen) o.costUsd = r2(s.cost);
+      return o;
+    })
+  }));
+}
+
+// Memoised on purpose: render() -> buckets() -> dayMap() -> rootsFiltered() is called at
+// least three times per paint, and an un-memoised top-N can pick a different 7th model on
+// each pass when two models tie, making the chart contradict the table.
+let _vrKey = '', _vr = null;
+function rootsFiltered(){
+  const rs = roots();
+  const src = APP === 'all' ? rs : rs.filter(r => appOf(r) === APP);
+  if (DIM !== 'model') return src;
+  const rng = effRange() || ['-','-'];
+  const k = APP + '|' + rng[0] + '|' + rng[1] + '|' + (DATA && DATA.generatedAt);
+  if (_vrKey !== k) { _vr = buildModelRoots(src, rng); _vrKey = k; }
+  return _vr;
+}
 
 function dataSpan(){
   const days = [];
@@ -285,10 +382,27 @@ function render(){
   document.getElementById('rangeLabel').textContent =
     fmtLbl(rng[0]) + ' 00:00:00 - ' + fmtLbl(rng[1]) + ' 23:59:59';
 
+  const kindTag = r => r.kind || (r.real ? '真实值' : '估算');
+  if (DIM === 'model' && !rs.length) {
+    // Two different empties: the cache predates byModel (a rescan fixes it), versus the
+    // range/tab simply having no model-tagged rows (a rescan would fix nothing).
+    const hasAny = roots().some(r => (r.days||[]).some(d => d.byModel && typeof d.byModel === 'object'));
+    const why = hasAny
+      ? '当前时间区间和标签页内没有带模型标记的用量记录，放宽日期范围或切到「全部」试试。'
+      : '当前缓存里没有模型维度数据，点右上角「⟳ 刷新」重新扫描。';
+    document.getElementById('cards').innerHTML = '<div class="card"><div class="k">按模型暂不可用</div>' +
+      '<div class="s">' + why + '</div></div>';
+    document.getElementById('legend').innerHTML = '';
+    document.getElementById('chart').innerHTML = '';
+    document.getElementById('tbl').innerHTML = '';
+    document.getElementById('chartTitle').textContent = '输入 token';
+    return;
+  }
+
   // legend
   document.getElementById('legend').innerHTML = rs.map((r,i) =>
     '<span><span class="dot" style="background:'+colorOf(r.key,i)+'"></span>'+r.label+
-    '<span class="tag">'+(r.real?'真实值':'估算')+(r.costUsd!=null?' $'+r.costUsd:'')+'</span></span>').join('');
+    '<span class="tag">'+(kindTag(r))+(r.costUsd!=null?' $'+r.costUsd:'')+'</span></span>').join('');
 
   // cards: range totals per root + grand total
   const sum = (arr,f) => arr.reduce((a,x)=>a+(x[f]||0),0);
@@ -296,7 +410,7 @@ function render(){
     const inR = (r.days||[]).filter(d=>d.day>=rng[0]&&d.day<=rng[1]);
     const inT = sum(inR,'inTokens'), outT = sum(inR,'outTokens'), req = sum(inR,'requests');
     return card(r.label+' 输入', fmtN(inT),
-      '输出 '+fmtN(outT)+' · 请求 '+fmtN(req)+' · '+(r.real?'真实值':'估算'), colorOf(r.key,i));
+      '输出 '+fmtN(outT)+' · 请求 '+fmtN(req)+' · '+kindTag(r), colorOf(r.key,i));
   });
   const tot = rs.reduce((s,r)=>{
     (r.days||[]).filter(d=>d.day>=rng[0]&&d.day<=rng[1]).forEach(d=>{ s.in+=d.inTokens; s.out+=d.outTokens; s.req+=d.requests; });
@@ -327,14 +441,23 @@ function render(){
   document.getElementById('footnote').textContent =
     'Qoder CLI 本地 usage 为 0，其数据为字符估算（内置 200K / BYOK '+(DATA.customWindowK||300)+'K 窗口，≈0.32 token/字符）；' +
     'Claude Code / CodeBuddy / Cline / Reasonix 转录含真实 usage；cc-switch 汇总来自 ~/.cc-switch/cc-switch.db（含 USD 成本），' +
-    '与本地转录重叠日期已去重。默认显示最近 30 天。';
+    '与本地转录重叠日期已去重。默认显示最近 30 天。' +
+    (DIM === 'model'
+      ? ' 按模型：模型名取自各转录的 model 字段，已去掉 provider 前缀与日期后缀（deepseek-v4-flash-0731 → deepseek-v4-flash），'
+        + '缺失或 <synthetic> 归入 unknown；柱图只列输入 token 前 '+MODEL_TOPN+' 名，其余并入「其他」。'
+        + '成本仅 cc-switch 覆盖的模型有真实 USD，其它来源不估价。'
+      : '');
 }
 
 function drawChart(rows, rs){
   const W = 1300, H = 360, padL = 58, padB = 48, padT = 12, padR = 12;
   const iw = W - padL - padR, ih = H - padT - padB;
   const max = Math.max.apply(null, rows.map(r => rs.reduce((s,x)=>s+(r[x.key+'In']||0),0)).concat([1]));
-  const yMax = Math.ceil(max / 1e8) * 1e8 || 1e8;
+  // The old fixed 1e8 quantum flattened the model view, where one model's daily peak can be
+  // 1e6 and would render as a 1%-tall bar. Scale the step to the data instead.
+  const rawStep = (max || 1) / 4;
+  const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+  const yMax = Math.ceil(rawStep / mag) * mag * 4;
   const slot = iw / rows.length, bw = Math.min(slot * 0.72, 40), gap = slot - bw;
   let g = '';
   for (let i = 0; i <= 4; i++) {
@@ -439,6 +562,13 @@ document.getElementById('gran').addEventListener('click', e => {
   if (e.target.dataset.g) {
     GRAN = e.target.dataset.g;
     document.querySelectorAll('#gran button').forEach(b => b.classList.toggle('active', b === e.target));
+    render();
+  }
+});
+document.getElementById('dim').addEventListener('click', e => {
+  if (e.target.dataset.d) {
+    DIM = e.target.dataset.d;
+    document.querySelectorAll('#dim button').forEach(b => b.classList.toggle('active', b === e.target));
     render();
   }
 });

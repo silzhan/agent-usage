@@ -34,6 +34,22 @@ powershell -NoProfile -ExecutionPolicy Bypass -File collect.ps1
 - 日期按 UTC 日切分（北京时间会晚 8 小时跨天）
 - 结果为估算：量级与分布可信，精确值以 Qoder 服务端为准
 
+## 按模型统计
+
+工具栏的 **按来源 / 按模型** 切换复用同一套卡片、堆叠图、图例和明细表，只是把聚合轴从"来源"换成"模型"：
+把各来源每天的 `byModel` 跨来源合并成一个虚拟 root（同名模型在 Qoder / Claude Code / cc-switch 里出现几次都归一条）。
+
+- **模型名归一化**（`collect.ps1` 的 `NormModel`、`collect-ccswitch.py` 的 `norm_model`、`index.html` 的 `normModel` 三份实现必须逐字一致，已用 58 条向量交叉验证零差异）：
+  转小写 → 取最后一个 `/` 之后的部分（`anthropic/claude-3-5-sonnet-20241022` → `claude-3-5-sonnet`）
+  → 去尾部日期 `-([a-z]{1,4})?-[0-9]{4,8}`（`gpt-4o-20250801` → `gpt-4o`、`deepseek-v4-flash-0731` → `deepseek-v4-flash`）
+  → 去尾部分隔符；空值和 Claude 的 `<synthetic>` 都落到 `unknown`。
+  不做别名合并（`k3` 与 `kimi-k3` 各自成条），因为猜错别名会把两个真实模型并成一条假数据。
+- **Top-7 + 其他**：按输入 token 取前 7 个模型，其余并入 `其他`，正好用完现有 8 个配色；`其他` 可能混合真实值与估算，标记为"混合"。
+  切标签页或改日期区间会重算 Top-7（排序带模型名 tie-break，保证图例、图表、表格选出的那 7 个一致）。
+- **成本只来自 cc-switch**：其它来源没有可靠单价，一律不估价。所以 `真实值` ≠ 一定有 `$`——本地转录有真实 token 但无金额，
+  只有 cc-switch 覆盖的模型才带 `total_cost_usd`。cc-switch 的聚合止于清理前最后一天，若日期区间没覆盖到它，模型视图不会出现任何 `$`。
+- 采集状态文件升到 `version 6`，首次运行会全量重扫一次（约 20 秒 / 数百文件），之后仍是约 1 秒的增量扫描。
+
 ## 文件
 
 | 文件 | 说明 |
