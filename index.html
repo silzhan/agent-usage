@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI CLI Token 用量</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='10' y='3' fill='%232b6cf6' rx='2'/%3E%3Crect width='4' height='7' y='6' x='2' fill='%233ecf8e' rx='1'/%3E%3Crect width='4' height='9' y='4' x='7' fill='%23f7b84f' rx='1'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg:#10141d; --panel:#1a2030; --panel2:#151b28; --border:#2a3350; --text:#e2e8f5;
+    --muted:#8b96b3; --accent:#2b6cf6; --accent2:#3b82f6;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font:14px/1.5 "Segoe UI", "Microsoft YaHei", sans-serif; }
+  .topbar { display:flex; align-items:center; gap:14px; padding:14px 24px;
+            background:var(--panel); border-bottom:1px solid var(--border); flex-wrap:wrap;
+            position:sticky; top:0; z-index:20; }
+  .tabs { display:flex; background:var(--panel2); border:1px solid var(--border);
+          border-radius:10px; padding:3px; gap:2px; flex-wrap:wrap; }
+  .tabs button { border:none; background:transparent; color:var(--muted); padding:6px 14px;
+                 border-radius:8px; cursor:pointer; font-size:13px; }
+  .tabs button.active { background:rgba(43,108,246,.18); color:var(--accent2); }
+  .tabs button:hover:not(.active) { color:var(--text); }
+  .ctrl { display:flex; align-items:center; gap:8px; }
+  .iconbtn { background:var(--panel2); border:1px solid var(--border); color:var(--muted);
+             border-radius:10px; padding:7px 12px; cursor:pointer; font-size:13px;
+             display:flex; align-items:center; gap:6px; }
+  .iconbtn:hover { color:var(--text); }
+  .rangebtn { background:var(--accent); border:none; color:#fff; border-radius:10px;
+              padding:8px 16px; cursor:pointer; font-size:13px; display:flex; align-items:center; gap:8px; }
+  .rangebtn:hover { filter:brightness(1.1); }
+  .gran { display:flex; background:var(--panel2); border:1px solid var(--border);
+          border-radius:10px; padding:3px; gap:2px; }
+  .gran button { border:none; background:transparent; color:var(--muted); padding:5px 12px;
+                 border-radius:7px; cursor:pointer; font-size:12px; }
+  .gran button.active { background:rgba(43,108,246,.18); color:var(--accent2); }
+  #status { color:#f7b84f; font-size:12px; }
+  main { padding:18px 24px 40px; max-width:1400px; margin:0 auto; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:14px; margin:0 0 20px; }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:16px 18px; }
+  .card .k { color:var(--muted); font-size:12px; }
+  .card .v { font-size:24px; font-weight:600; margin-top:4px; }
+  .card .s { color:var(--muted); font-size:12px; margin-top:2px; }
+  section { background:var(--panel); border:1px solid var(--border); border-radius:12px;
+            padding:18px; margin-bottom:20px; }
+  section h2 { margin:0 0 12px; font-size:15px; display:flex; justify-content:space-between; align-items:baseline; }
+  .legend { display:flex; gap:16px; color:var(--muted); font-size:12px; margin-bottom:8px; flex-wrap:wrap; }
+  .dot { display:inline-block; width:10px; height:10px; border-radius:3px; margin-right:5px; vertical-align:-1px; }
+  .tag { font-size:10px; border:1px solid var(--border); border-radius:4px; padding:0 4px; margin-left:4px; }
+  svg { width:100%; height:auto; display:block; }
+  svg text { fill:var(--muted); font-size:10px; }
+  table { border-collapse:collapse; width:100%; font-size:13px; }
+  th,td { padding:6px 10px; text-align:right; border-bottom:1px solid var(--border); white-space:nowrap; }
+  th:first-child, td:first-child { text-align:left; }
+  th { color:var(--muted); font-weight:600; }
+  tr.nodata td { color:#4a5470; }
+  .muted { color:var(--muted); }
+  .picker { position:absolute; top:64px; left:24px; z-index:50; background:var(--panel);
+            border:1px solid var(--border); border-radius:14px; padding:16px;
+            box-shadow:0 12px 40px rgba(0,0,0,.5); width:620px; }
+  .picker[hidden] { display:none; }
+  .presets { display:flex; gap:8px; margin-bottom:14px; flex-wrap:wrap; }
+  .presets button { background:var(--panel2); border:1px solid var(--border); color:var(--text);
+                    border-radius:8px; padding:5px 14px; cursor:pointer; font-size:12px; }
+  .presets button.active { border-color:var(--accent2); color:var(--accent2); }
+  .presets button:hover { border-color:var(--accent2); }
+  .pickerbody { display:grid; grid-template-columns:1fr 1.2fr; gap:16px; }
+  .fields { display:flex; flex-direction:column; gap:12px; }
+  .field label { display:block; color:var(--muted); font-size:12px; margin-bottom:5px; }
+  .field input { width:100%; background:var(--panel2); border:1px solid var(--border);
+                 border-radius:8px; padding:8px 10px; color:var(--text); font-size:14px; color-scheme:dark; }
+  .field input:focus { outline:none; border-color:var(--accent2); }
+  .pactions { display:flex; justify-content:flex-end; gap:10px; margin-top:auto; }
+  .pactions button { border-radius:8px; padding:7px 18px; cursor:pointer; font-size:13px; }
+  #cancelBtn { background:transparent; border:1px solid var(--border); color:var(--muted); }
+  #okBtn { background:var(--accent); border:none; color:#fff; }
+  .calhead { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
+  .calhead button { background:transparent; border:none; color:var(--muted); font-size:16px; cursor:pointer; padding:2px 10px; }
+  .calhead span { font-size:14px; }
+  .cal { background:var(--panel2); border:1px solid var(--border); border-radius:10px; padding:12px; }
+  .calgrid { display:grid; grid-template-columns:repeat(7,1fr); gap:2px; }
+  .calgrid .dow { text-align:center; color:var(--muted); font-size:11px; padding:4px 0; }
+  .calday { text-align:center; padding:6px 0; font-size:12px; border-radius:6px; cursor:pointer; color:var(--text); }
+  .calday.dim { color:#3d4660; }
+  .calday:hover:not(.dim):not(.future) { background:rgba(43,108,246,.15); }
+  .calday.sel { background:var(--accent); color:#fff; }
+  .calday.inrange { background:rgba(43,108,246,.12); color:var(--text); }
+  .calday.future { color:#2e3650; cursor:default; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="tabs" id="tabs"></div>
+  <div class="ctrl">
+    <button class="iconbtn" id="refreshBtn" title="立即刷新">⟳ 刷新</button>
+    <button class="iconbtn" id="autoBtn" title="切换自动刷新">⏱ <span id="autoLabel">30s</span></button>
+  </div>
+  <button class="rangebtn" id="rangeBtn">📅 <span id="rangeLabel">…</span></button>
+  <span id="status"></span>
+</div>
+<div class="picker" id="picker" hidden>
+  <div class="presets" id="presets"></div>
+  <div class="pickerbody">
+    <div class="fields">
+      <div class="field"><label>开始时间</label><input type="date" id="startIn"></div>
+      <div class="field"><label>结束时间</label><input type="date" id="endIn"></div>
+      <div class="pactions">
+        <button id="cancelBtn">取消</button>
+        <button id="okBtn">确定</button>
+      </div>
+    </div>
+    <div>
+      <div class="calhead">
+        <button id="prevM">‹</button><span id="calTitle"></span><button id="nextM">›</button>
+      </div>
+      <div class="cal">
+        <div class="calgrid" id="calDow"></div>
+        <div class="calgrid" id="calBody"></div>
+      </div>
+    </div>
+  </div>
+</div>
+<main>
+  <div class="cards" id="cards"></div>
+  <section>
+    <h2><span id="chartTitle">输入 token</span>
+      <span class="gran" id="gran">
+
+        <button data-g="day" class="active">按天</button>
+        <button data-g="week">按周</button>
+        <button data-g="month">按月</button>
+      </span>
+    </h2>
+    <div class="legend" id="legend"></div>
+    <div id="chart"></div>
+  </section>
+  <section>
+    <h2>明细</h2>
+    <div style="overflow-x:auto"><table id="tbl"></table></div>
+  </section>
+  <p class="muted" style="font-size:12px" id="footnote"></p>
+</main>
+<script>
+
+const COLOR_HEX = {
+  intl:'#4f8ef7', cn:'#3ecf8e', cc:'#f7b84f',
+  'ccs-claude':'#f28e3c', 'ccs-codex':'#b48ef7', 'ccs-gemini':'#5cc8e8', 'ccs-opencode':'#e85c8a',
+  'codebuddy':'#d4e157', 'cline':'#7986cb', 'cline-vsc':'#9fa8da', 'reasonix':'#a1887f'
+};
+const PALETTE = ['#4f8ef7','#3ecf8e','#f7b84f','#b48ef7','#e85c8a','#5cc8e8','#9fef4f','#ef9f4f'];
+const colorOf = (key, idx) => COLOR_HEX[key] || PALETTE[idx % PALETTE.length];
+const fmtN = n => n >= 1e9 ? (n/1e9).toFixed(2)+'B'
+               : n >= 1e6 ? (n/1e6).toFixed(1)+'M'
+               : n >= 1e3 ? (n/1e3).toFixed(1)+'K' : String(n);
+
+let DATA = null;
+let GRAN = 'day';
+let APP = 'all';        // app tab filter: 'all' | app family
+let FROM = '';          // '' = default (last 30 days of data)
+let TO   = '';
+let AUTO = 30000;       // auto refresh ms; 0 = off
+let autoTimer = null;
+
+async function load(force) {
+  const st = document.getElementById('status');
+  st.textContent = '加载中…';
+  try {
+    const res = await fetch('/api/usage' + (force ? '?refresh=1' : ''));
+    const d = await res.json();
+    if (res.status === 202) { setTimeout(()=>load(false), 3000); return; }
+    DATA = d;
+    buildTabs();
+    render();
+    st.textContent = d.scanning ? '后台重扫中，显示缓存结果' : '更新于 ' + (d.generatedAt||'');
+  } catch (e) { st.textContent = '加载失败: ' + e; }
+}
+
+// ---- date helpers (UTC day strings) ----
+const pad2 = n => String(n).padStart(2,'0');
+function dstr(dt){ return dt.getUTCFullYear()+'-'+pad2(dt.getUTCMonth()+1)+'-'+pad2(dt.getUTCDate()); }
+function parseD(s){ const p=s.split('-'); return new Date(Date.UTC(+p[0], +p[1]-1, +p[2])); }
+function addDays(s,n){ const d=parseD(s); d.setUTCDate(d.getUTCDate()+n); return dstr(d); }
+function diffDays(a,b){ return Math.round((parseD(b)-parseD(a))/864e5); }
+function* eachDay(from,to){ let s=from; while(s<=to){ yield s; s=addDays(s,1); } }
+
+// ---- app family grouping for tabs ----
+function appOf(r){
+  const l = r.label;
+  if (/claude/i.test(l)) return 'Claude Code';
+  if (/codex/i.test(l))  return 'Codex';
+  if (/gemini/i.test(l)) return 'Gemini';
+  if (/opencode/i.test(l)) return 'OpenCode';
+  if (/codebuddy/i.test(l)) return 'CodeBuddy';
+  if (/reasonix/i.test(l)) return 'Reasonix';
+  if (/cline/i.test(l)) return 'Cline';
+  return 'Qoder CLI';
+}
+function roots(){ return DATA ? (DATA.roots||[]) : []; }
+function rootsFiltered(){ const rs = roots(); return APP==='all' ? rs : rs.filter(r=>appOf(r)===APP); }
+
+function dataSpan(){
+  const days = [];
+  roots().forEach(r => (r.days||[]).forEach(d => days.push(d.day)));
+  if (!days.length) return null;
+  days.sort();
+  return [days[0], days[days.length-1]];
+}
+// effective FROM/TO with default = last 30 days of data
+function effRange(){
+  const sp = dataSpan(); if (!sp) return null;
+  let to = TO || sp[1];
+  let from = FROM || addDays(to, -29);   // 30 days inclusive
+  if (from < sp[0]) from = sp[0];
+  if (to < from) to = from;
+  return [from, to];
+}
+
+// ---- zero-filled per-day map (only filtered roots) ----
+function dayMap(){
+  const rng = effRange(); if (!rng) return {};
+  const rs = rootsFiltered();
+  const map = {};
+  rs.forEach(r => (r.days||[]).forEach(x => {
+    if (x.day < rng[0] || x.day > rng[1]) return;
+    const m = map[x.day] = map[x.day] || {day:x.day};
+    m[r.key+'Req'] = (m[r.key+'Req']||0) + x.requests;
+    m[r.key+'In']  = (m[r.key+'In']||0)  + x.inTokens;
+  }));
+  const full = {};
+  for (const d of eachDay(rng[0], rng[1])) {
+    const m = full[d] = map[d] || {day:d};
+    rs.forEach(r => { m[r.key+'Req'] = m[r.key+'Req']||0; m[r.key+'In'] = m[r.key+'In']||0; });
+  }
+  return full;
+}
+
+function buildTabs(){
+  const fams = [];
+  roots().forEach(r => { const a = appOf(r); if (!fams.includes(a)) fams.push(a); });
+  const el = document.getElementById('tabs');
+  el.innerHTML = '';
+  ['all'].concat(fams).forEach(a => {
+    const b = document.createElement('button');
+    b.textContent = a === 'all' ? '全部' : a;
+    b.className = a === APP ? 'active' : '';
+    b.onclick = () => { APP = a; buildTabs(); render(); };
+    el.appendChild(b);
+  });
+}
+
+function buckets(){
+  const m = dayMap();
+  const rs = rootsFiltered();
+  const bmap = {};
+  for (const d of Object.keys(m)) {
+    let k, label;
+    if (GRAN === 'day')      { k = d; label = d; }
+    else if (GRAN === 'week'){ const ws = weekStart(d); k = ws; label = ws + ' 起'; }
+    else                     { k = d.slice(0,7); label = d.slice(0,7); }
+    const b = bmap[k] = bmap[k] || {key:k, label, days:0, nodata:0};
+    rs.forEach(r => {
+      b[r.key+'Req'] = (b[r.key+'Req']||0) + (m[d][r.key+'Req']||0);
+      b[r.key+'In']  = (b[r.key+'In']||0)  + (m[d][r.key+'In']||0);
+    });
+    b.days++;
+    if (!rs.reduce((s,r)=>s+(m[d][r.key+'Req']||0),0)) b.nodata++;
+  }
+  return Object.values(bmap).sort((a,b)=>a.key<b.key?-1:1);
+}
+function weekStart(s){ const d=parseD(s); const dow=(d.getUTCDay()+6)%7; d.setUTCDate(d.getUTCDate()-dow); return dstr(d); }
+
+const card = (k,v,s,color) => '<div class="card"><div class="k">'+k+'</div><div class="v"'+
+  (color ? ' style="color:'+color+'"' : '')+'>'+v+'</div><div class="s">'+s+'</div></div>';
+
+function render(){
+  if (!DATA) return;
+  const rs = rootsFiltered();
+  const rng = effRange() || ['-','-'];
+  const rows = buckets();
+
+  // range label: YYYY/M/d 00:00:00 - YYYY/M/d 23:59:59
+  const fmtLbl = s => { const p = s.split('-'); return p[0]+'/'+ (+p[1]) +'/'+ (+p[2]); };
+  document.getElementById('rangeLabel').textContent =
+    fmtLbl(rng[0]) + ' 00:00:00 - ' + fmtLbl(rng[1]) + ' 23:59:59';
+
+  // legend
+  document.getElementById('legend').innerHTML = rs.map((r,i) =>
+    '<span><span class="dot" style="background:'+colorOf(r.key,i)+'"></span>'+r.label+
+    '<span class="tag">'+(r.real?'真实值':'估算')+(r.costUsd!=null?' $'+r.costUsd:'')+'</span></span>').join('');
+
+  // cards: range totals per root + grand total
+  const sum = (arr,f) => arr.reduce((a,x)=>a+(x[f]||0),0);
+  const cards = rs.map((r,i) => {
+    const inR = (r.days||[]).filter(d=>d.day>=rng[0]&&d.day<=rng[1]);
+    const inT = sum(inR,'inTokens'), outT = sum(inR,'outTokens'), req = sum(inR,'requests');
+    return card(r.label+' 输入', fmtN(inT),
+      '输出 '+fmtN(outT)+' · 请求 '+fmtN(req)+' · '+(r.real?'真实值':'估算'), colorOf(r.key,i));
+  });
+  const tot = rs.reduce((s,r)=>{
+    (r.days||[]).filter(d=>d.day>=rng[0]&&d.day<=rng[1]).forEach(d=>{ s.in+=d.inTokens; s.out+=d.outTokens; s.req+=d.requests; });
+    return s;
+  }, {in:0,out:0,req:0});
+  cards.push(card('合计输入', fmtN(tot.in), '合计输出 '+fmtN(tot.out)+' · 请求 '+fmtN(tot.req), ''));
+  document.getElementById('cards').innerHTML = cards.join('');
+
+  document.getElementById('chartTitle').textContent =
+    ({day:'每日',week:'每周（周一起）',month:'每月'})[GRAN] + '输入 token（'+fmtLbl(rng[0])+' ~ '+fmtLbl(rng[1])+'）';
+  drawChart(rows, rs);
+
+  const z = v => v ? fmtN(v) : '—';
+  const gLabel = {day:'日期(UTC)', week:'周（周一）', month:'月'}[GRAN];
+  let html = '<tr><th>'+gLabel+'</th>' + rs.map(r => '<th>'+r.label+'请求</th><th>'+r.label+'输入</th>').join('') +
+      '<th>合计输入</th><th>无数据</th></tr>';
+  rows.forEach(r => {
+    let tot2 = 0, anyReq = 0;
+    const cells = rs.map(x => {
+      tot2 += r[x.key+'In']||0; anyReq += r[x.key+'Req']||0;
+      return '<td>'+z(r[x.key+'Req'])+'</td><td>'+z(r[x.key+'In'])+'</td>';
+    }).join('');
+    html += '<tr'+(anyReq===0?' class="nodata"':'')+'><td>'+r.label+'</td>'+cells+
+            '<td>'+z(tot2)+'</td><td>'+(anyReq===0?'是':'')+'</td></tr>';
+  });
+  document.getElementById('tbl').innerHTML = html;
+
+  document.getElementById('footnote').textContent =
+    'Qoder CLI 本地 usage 为 0，其数据为字符估算（内置 200K / BYOK '+(DATA.customWindowK||300)+'K 窗口，≈0.32 token/字符）；' +
+    'Claude Code / CodeBuddy / Cline / Reasonix 转录含真实 usage；cc-switch 汇总来自 ~/.cc-switch/cc-switch.db（含 USD 成本），' +
+    '与本地转录重叠日期已去重。默认显示最近 30 天。';
+}
+
+function drawChart(rows, rs){
+  const W = 1300, H = 360, padL = 58, padB = 48, padT = 12, padR = 12;
+  const iw = W - padL - padR, ih = H - padT - padB;
+  const max = Math.max.apply(null, rows.map(r => rs.reduce((s,x)=>s+(r[x.key+'In']||0),0)).concat([1]));
+  const yMax = Math.ceil(max / 1e8) * 1e8 || 1e8;
+  const slot = iw / rows.length, bw = Math.min(slot * 0.72, 40), gap = slot - bw;
+  let g = '';
+  for (let i = 0; i <= 4; i++) {
+    const y = padT + ih - ih * i / 4;
+    g += '<line x1="'+padL+'" y1="'+y+'" x2="'+(W-padR)+'" y2="'+y+'" stroke="#2a3350" stroke-width="1"/>';
+    g += '<text x="'+(padL-6)+'" y="'+(y+3)+'" text-anchor="end">'+fmtN(yMax*i/4)+'</text>';
+  }
+  const tickEvery = Math.max(1, Math.ceil(rows.length/26));
+  rows.forEach((r, i) => {
+    const x = padL + slot*i + gap/2;
+    const total = rs.reduce((s,rr)=>s+(r[rr.key+'In']||0),0);
+    if (total === 0) {
+      g += '<line x1="'+x+'" y1="'+(padT+ih)+'" x2="'+(x+bw)+'" y2="'+(padT+ih)+'" stroke="#3a4360" stroke-width="2"><title>'+r.label+' 无数据</title></line>';
+    } else {
+      let acc = 0, ci = 0;
+      rs.forEach(rr => {
+        const v = r[rr.key+'In']||0;
+        if (v <= 0) { ci++; return; }
+        const h = ih * v / yMax;
+        const yTop = padT + ih - ih * (acc + v) / yMax;
+        g += '<rect x="'+x+'" y="'+yTop+'" width="'+bw+'" height="'+h+'" fill="'+colorOf(rr.key,ci++)+'" rx="1"><title>'+r.label+' '+rr.label+' '+fmtN(v)+'</title></rect>';
+        acc += v;
+      });
+    }
+    if (i % tickEvery === 0)
+      g += '<text x="'+(x+bw/2)+'" y="'+(H-padB+14)+'" text-anchor="middle">'+(GRAN==='day'? r.key.slice(5) : r.label)+'</text>';
+  });
+  document.getElementById('chart').innerHTML =
+    '<svg viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="xMidYMid meet">'+g+'</svg>';
+}
+
+
+// ---- date range picker ----
+const DOW = ['日','一','二','三','四','五','六'];
+const PRESETS = [['当天',0],['1d',1],['7d',7],['14d',14],['30d',30]];
+let pStart = '', pEnd = '';
+let calY = 0, calM = 0;
+let calFirst = null;
+
+function openPicker(){
+  const sp = dataSpan(); if (!sp) return;
+  const rng = effRange();
+  pStart = rng[0]; pEnd = rng[1];
+  const d = parseD(pEnd);
+  calY = d.getUTCFullYear(); calM = d.getUTCMonth();
+  document.getElementById('startIn').value = pStart;
+  document.getElementById('endIn').value = pEnd;
+  document.getElementById('calDow').innerHTML = DOW.map(x=>'<div class="dow">'+x+'</div>').join('');
+  document.getElementById('picker').hidden = false;
+  drawCal();
+}
+function closePicker(){ document.getElementById('picker').hidden = true; }
+
+function setRange(a, b){
+  if (!a || !b) return;
+  if (a > b) { const t = a; a = b; b = t; }
+  pStart = a; pEnd = b;
+  document.getElementById('startIn').value = a;
+  document.getElementById('endIn').value = b;
+  document.querySelectorAll('#presets button').forEach((btn, i) => {
+    const n = PRESETS[i][1];
+    btn.classList.toggle('active', pStart === addDays(pEnd, -(n>0?n-1:0)));
+  });
+}
+
+function drawCal(){
+  document.getElementById('calTitle').textContent = calY + '年' + (calM+1) + '月';
+  const body = document.getElementById('calBody');
+  body.innerHTML = '';
+  const startDow = new Date(Date.UTC(calY, calM, 1)).getUTCDay();
+  const prevDays = new Date(Date.UTC(calY, calM, 0)).getUTCDate();
+  const cells = [];
+  for (let i = startDow - 1; i >= 0; i--) cells.push(dstr(new Date(Date.UTC(calY, calM-1, prevDays-i))));
+  const daysIn = new Date(Date.UTC(calY, calM+1, 0)).getUTCDate();
+  for (let i = 1; i <= daysIn; i++) cells.push(dstr(new Date(Date.UTC(calY, calM, i))));
+  while (cells.length % 7) cells.push('');
+  const sp = dataSpan() || ['0','9'];
+  cells.forEach(d => {
+    const el = document.createElement('div');
+    const inMonth = d && d.slice(0,7) === calY+'-'+pad2(calM+1);
+    const clickable = d && inMonth && d >= sp[0] && d <= sp[1];
+    el.className = 'calday' + (d && !inMonth ? ' dim' : '') +
+      (d === pStart || d === pEnd ? ' sel' : (d && d > pStart && d < pEnd ? ' inrange' : '')) +
+      (inMonth && !clickable && d ? ' future' : '');
+    if (d) el.textContent = +d.split('-')[2];
+    if (clickable) el.onclick = () => {
+      if (calFirst === null) { setRange(d, d); calFirst = d; }
+      else { setRange(calFirst, d); calFirst = null; }
+      drawCal();
+    };
+    body.appendChild(el);
+  });
+  // rebuild presets active state
+  document.querySelectorAll('#presets button').forEach((btn, i) => {
+    const n = PRESETS[i][1];
+    btn.classList.toggle('active', pStart === addDays(pEnd, -(n>0?n-1:0)));
+  });
+}
+
+// ---- events ----
+document.getElementById('gran').addEventListener('click', e => {
+  if (e.target.dataset.g) {
+    GRAN = e.target.dataset.g;
+    document.querySelectorAll('#gran button').forEach(b => b.classList.toggle('active', b === e.target));
+    render();
+  }
+});
+document.getElementById('rangeBtn').addEventListener('click', () => {
+  const p = document.getElementById('picker');
+  if (p.hidden) { calFirst = null; openPicker(); } else closePicker();
+});
+document.getElementById('cancelBtn').addEventListener('click', closePicker);
+document.getElementById('okBtn').addEventListener('click', () => {
+  FROM = document.getElementById('startIn').value;
+  TO   = document.getElementById('endIn').value;
+  closePicker(); render();
+});
+document.getElementById('startIn').addEventListener('change', e => { setRange(e.target.value, pEnd); drawCal(); });
+document.getElementById('endIn').addEventListener('change', e => { setRange(pStart, e.target.value); drawCal(); });
+document.getElementById('prevM').addEventListener('click', () => { calM--; if (calM<0){calM=11;calY--;} drawCal(); });
+document.getElementById('nextM').addEventListener('click', () => { calM++; if (calM>11){calM=0;calY++;} drawCal(); });
+document.getElementById('refreshBtn').addEventListener('click', () => load(true));
+document.getElementById('autoBtn').addEventListener('click', () => {
+  AUTO = AUTO === 30000 ? 0 : 30000;
+  document.getElementById('autoLabel').textContent = AUTO ? '30s' : '关';
+  if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
+  if (AUTO) autoTimer = setInterval(() => load(false), AUTO);
+});
+// presets (create once)
+(function(){
+  const pe = document.getElementById('presets');
+  PRESETS.forEach(([label, n]) => {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.onclick = () => { setRange(addDays(pEnd, -(n>0?n-1:0)), pEnd); drawCal(); };
+    pe.appendChild(b);
+  });
+})();
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closePicker(); });
+autoTimer = setInterval(() => load(false), AUTO);
+load(false);
+</script>
+</body>
+</html>
