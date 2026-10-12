@@ -65,9 +65,47 @@ powershell -NoProfile -ExecutionPolicy Bypass -File collect.ps1
 
 - **Qoder CLI**（`.qoder` / `.qoder-cn`）：本地 usage 字段全为 0，字符估算（≈0.32 token/字符；内置模型 200K / BYOK `qoder-custom-*` 300K 窗口封顶）
 - **Claude Code 本地转录**（`.claude`）：真实 usage token；但 Claude Code 默认自动清理 30 天前的会话，历史会丢
-- **CodeBuddy 本地转录**（`.codebuddy`）：真实 usage（input_tokens/output_tokens，毫秒时间戳）
+- **CodeBuddy 本地转录**（`.codebuddy`）：真实 usage（`providerData.usage.inputTokens/outputTokens`，毫秒时间戳）——**当前严重低估，见[已知问题](#已知问题)**
 - **Cline CLI**（`.cline/data/sessions/*.messages.json`）：每条消息带 `metrics.{inputTokens, outputTokens, cacheReadTokens}` + 毫秒时间戳；另外 `.cline/data/db/sessions.db` 的 `metadata_json` 存每会话聚合 usage（可交叉验证）
 - **Cline VSCode 插件**（`%APPDATA%\Code\User\globalStorage\saoudrizwan.claude-dev\tasks`）：每任务的 `api_conversation_history.json`，assistant 条目带 `metrics.tokens`（prompt/completion/cached）——注意这份数据是旧的（3-4 月），默认 30 天窗口内看不到
 - **Reasonix**（`%APPDATA%\reasonix\stats`）：逐请求 stats（prompt/completion/cache_hit/cache_miss，带时区 ISO 时间戳）
 - **cc-switch 汇总**（`.cc-switch/cc-switch.db`）：cc-switch 在清理前预聚合的真实日用量，含 USD 成本，覆盖 Claude / Codex / Gemini / OpenCode——Claude Code 丢失的历史靠它补回；与本地转录重叠日期由 server.py 自动去重
+
+## 已知问题
+
+### CodeBuddy 少算约 15 倍（未修）
+
+2026-10-12 对 `~/.codebuddy/projects`（19 个 jsonl、7.9 MB）逐行实测：
+
+| | 请求 | 输入 token | 输出 token |
+|---|---|---|---|
+| 看板当前 | 48 | 4.56M | 19.6K |
+| 真实 | **552** | **68.83M** | **501K** |
+
+两个独立缺陷：
+
+1. **漏掉整个工具调用维度**（主因）。`collect.ps1` 的 codebuddy 分支要求行内含 `"role":"assistant"`，
+   但 CodeBuddy 把工具调用轮次写成 `"type":"function_call"`、**没有 role 字段**。这类记录有 504 条、
+   各带独立 usage，全部被跳过；匹配到的只剩 48 条纯文本回复，而漏掉的恰好是大头（64.3M 输入 / 482K 输出）。
+2. **模型名静默降级**。`"providerData":\{[^}]*"model":"` 在 67/552 行失配——`reasoning` 字符串里含 `}`，
+   `[^}]*` 跨不过去，这些记录的模型落到 `unknown`。
+
+正确口径（已验证：552/552 命中，合计与真实值分毫不差）：
+
+```powershell
+# 判据用 "inputTokens" 是否存在，不要用 role
+if ($line -match '"inputTokens":(\d+)' -and $line -match '"outputTokens":(\d+)') { ... }
+# 模型名锚定，绕开 } 跨界：providerData 里 model 紧跟 requestModelId
+if ($line -match '"model":"([^"]+)","requestModelId"') { $rawM = $matches[1] }
+# 日期仍是 "timestamp":(\d{13}) 毫秒 -> UTC 日（现有逻辑正确）
+```
+
+- token 取 `providerData.usage` 的**驼峰**键；同一行里 `message.usage.input_tokens`（蛇形）和
+  `providerData.rawUsage.prompt_tokens`（provider 原生）是同一数值的三份冗余，**只能取一份，不要相加**。
+- `inputTokens` **已包含缓存命中**（`prompt_cache_hit_tokens` 是其子集，实测 25678 = 7886 miss + 17792 hit），
+  所以不像 Claude 分支那样需要再叠加 `cache_read` / `cache_creation`。
+- 每条 usage 记录 `requests:1`，552 条按 `(sessionId, conversationRequestId, messageId)` 全唯一，
+  逐条累加不会重复计数；`turn-metrics` 记录只有 `tokenDelta`（实测为 0），不能当权威汇总用。
+- 修复时把 `$StateVersion` 从 6 提到 7，否则增量扫描会继续沿用旧的每文件缓存，改动不生效。
+
 
