@@ -1,4 +1,6 @@
-# Qoder CLI Token 用量看板（估算）
+# agent-usage — AI CLI Token 用量看板
+
+多 AI 编程助手（Qoder CLI 国际/国内、Claude Code、CodeBuddy、Cline CLI/插件、Reasonix、Codex、Gemini、OpenCode）的本地 token 用量统计与可视化。
 
 Qoder CLI 本地记录的 usage 字段全为 0，本工具通过扫描会话转录里的字符量来**估算** token 消耗，
 覆盖两个 CLI 目录：
