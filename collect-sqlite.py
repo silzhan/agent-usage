@@ -17,7 +17,7 @@ import os
 import re
 import sqlite3
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -67,7 +67,9 @@ def norm_model(s):
 
 
 def utc_day(ms):
-    return datetime.utcfromtimestamp(ms / 1000.0).strftime("%Y-%m-%d")
+    # utcfromtimestamp() is deprecated: its DeprecationWarning lands on stdout under the
+    # server's merged stderr, and the whole collector's JSON stops parsing.
+    return datetime.fromtimestamp(ms / 1000.0, timezone.utc).strftime("%Y-%m-%d")
 
 
 def read_json(cell):
