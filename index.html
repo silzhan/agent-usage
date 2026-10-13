@@ -7,12 +7,27 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='10' y='3' fill='%232b6cf6' rx='2'/%3E%3Crect width='4' height='7' y='6' x='2' fill='%233ecf8e' rx='1'/%3E%3Crect width='4' height='9' y='4' x='7' fill='%23f7b84f' rx='1'/%3E%3C/svg%3E">
 <style>
   :root {
+    color-scheme:dark;
     --bg:#10141d; --panel:#1a2030; --panel2:#151b28; --border:#2a3350; --text:#e2e8f5;
     --muted:#8b96b3; --accent:#2b6cf6; --accent2:#3b82f6;
+    --tint:rgba(43,108,246,.18); --tintsoft:rgba(43,108,246,.12);
+    --grid:#2a3350; --stub:#3a4360; --nodatarow:#4a5470; --dim:#3d4660; --future:#2e3650;
+    --warn:#f7b84f; --shadow:rgba(0,0,0,.5); --tipbg:rgba(12,16,26,.97);
+    --hover:rgba(226,232,245,.11); --barstroke:rgba(0,0,0,.32);
+  }
+  html[data-theme=light] {
+    color-scheme:light;
+    --bg:#f2f4fa; --panel:#fff; --panel2:#e9edf7; --border:#d2d9e8; --text:#1a2237;
+    --muted:#5b6785; --accent:#2b6cf6; --accent2:#1c5cd0;
+    --tint:rgba(43,108,246,.13); --tintsoft:rgba(43,108,246,.09);
+    --grid:#dfe4f0; --stub:#c2cbe0; --nodatarow:#98a3bd; --dim:#a9b3c9; --future:#c6cddd;
+    --warn:#a25b06; --shadow:rgba(30,44,80,.16); --tipbg:rgba(255,255,255,.98);
+    --hover:rgba(43,108,246,.08); --barstroke:rgba(255,255,255,.9);
   }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--text);
-         font:14px/1.5 "Segoe UI", "Microsoft YaHei", sans-serif; }
+         font:14px/1.5 "Segoe UI", "Microsoft YaHei", sans-serif;
+         transition:background-color .18s ease, color .18s ease; }
   .topbar { display:flex; align-items:center; gap:14px; padding:14px 24px;
             background:var(--panel); border-bottom:1px solid var(--border); flex-wrap:wrap;
             position:sticky; top:0; z-index:20; }
@@ -20,7 +35,7 @@
           border-radius:10px; padding:3px; gap:2px; flex-wrap:wrap; }
   .tabs button { border:none; background:transparent; color:var(--muted); padding:6px 14px;
                  border-radius:8px; cursor:pointer; font-size:13px; }
-  .tabs button.active { background:rgba(43,108,246,.18); color:var(--accent2); }
+  .tabs button.active { background:var(--tint); color:var(--accent2); }
   .tabs button:hover:not(.active) { color:var(--text); }
   .ctrl { display:flex; align-items:center; gap:8px; }
   .iconbtn { background:var(--panel2); border:1px solid var(--border); color:var(--muted);
@@ -34,8 +49,8 @@
           border-radius:10px; padding:3px; gap:2px; }
   .gran button { border:none; background:transparent; color:var(--muted); padding:5px 12px;
                  border-radius:7px; cursor:pointer; font-size:12px; }
-  .gran button.active { background:rgba(43,108,246,.18); color:var(--accent2); }
-  #status { color:#f7b84f; font-size:12px; }
+  .gran button.active { background:var(--tint); color:var(--accent2); }
+  #status { color:var(--warn); font-size:12px; }
   main { padding:18px 24px 40px; max-width:1400px; margin:0 auto; }
   .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:14px; margin:0 0 20px; }
   .card { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:16px 18px; }
@@ -50,17 +65,40 @@
   .tag { font-size:10px; border:1px solid var(--border); border-radius:4px; padding:0 4px; margin-left:4px; }
   svg { width:100%; height:auto; display:block; }
   svg text { fill:var(--muted); font-size:10px; }
+  svg .grid { stroke:var(--grid); stroke-width:1; }
+  svg .stub { stroke:var(--stub); stroke-width:2; }
+  svg .seg  { stroke:var(--barstroke); stroke-width:.6; }
+  /* full-height transparent band per column: the hover target, so a short bar is still
+     easy to hit and the whole day's breakdown shows at once */
+  svg .hit  { fill:transparent; cursor:crosshair; }
+  svg .hit.on { fill:var(--hover); }
+  section, .card { transition:background-color .18s ease, border-color .18s ease; }
+  .tip { position:fixed; z-index:60; pointer-events:none; min-width:210px; max-width:320px;
+         background:var(--tipbg); border:1px solid var(--accent2); border-radius:11px;
+         padding:9px 11px; font-size:12px; box-shadow:0 10px 30px var(--shadow); }
+  .tip[hidden] { display:none; }
+  .tip .h { font-weight:700; font-size:13px; padding-bottom:5px; margin-bottom:6px;
+            border-bottom:1px solid var(--border); }
+  .tip .r { display:flex; align-items:center; gap:6px; line-height:1.75; }
+  .tip .r .n { flex:1; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .tip .r .q { font-weight:600; font-variant-numeric:tabular-nums; }
+  .tip .s { margin-top:6px; padding-top:5px; border-top:1px solid var(--border);
+            display:flex; justify-content:space-between; gap:12px; font-weight:700;
+            font-variant-numeric:tabular-nums; }
+  .tip .e { color:var(--muted); }
+  /* the series palette is tuned for dark panels; lime/teal numbers wash out on white */
+  html[data-theme=light] .card .v { filter:brightness(.72) saturate(1.4); }
   table { border-collapse:collapse; width:100%; font-size:13px; }
   th,td { padding:6px 10px; text-align:right; border-bottom:1px solid var(--border); white-space:nowrap; }
   th:first-child, td:first-child { text-align:left; }
   th { color:var(--muted); font-weight:600; }
-  tr.nodata td { color:#4a5470; }
+  tr.nodata td { color:var(--nodatarow); }
   .muted { color:var(--muted); }
   /* fixed, not absolute: the topbar is sticky, so a document-relative popover would
      scroll away from the button it belongs to. placePicker() sets top/left. */
   .picker { position:fixed; z-index:50; background:var(--panel);
             border:1px solid var(--border); border-radius:14px; padding:16px;
-            box-shadow:0 12px 40px rgba(0,0,0,.5); width:620px; max-width:calc(100vw - 24px); }
+            box-shadow:0 12px 40px var(--shadow); width:620px; max-width:calc(100vw - 24px); }
   .picker[hidden] { display:none; }
   .presets { display:flex; gap:8px; margin-bottom:14px; flex-wrap:wrap; }
   .presets button { background:var(--panel2); border:1px solid var(--border); color:var(--text);
@@ -71,7 +109,7 @@
   .fields { display:flex; flex-direction:column; gap:12px; }
   .field label { display:block; color:var(--muted); font-size:12px; margin-bottom:5px; }
   .field input { width:100%; background:var(--panel2); border:1px solid var(--border);
-                 border-radius:8px; padding:8px 10px; color:var(--text); font-size:14px; color-scheme:dark; }
+                 border-radius:8px; padding:8px 10px; color:var(--text); font-size:14px; }
   .field input:focus { outline:none; border-color:var(--accent2); }
   .pactions { display:flex; justify-content:flex-end; gap:10px; margin-top:auto; }
   .pactions button { border-radius:8px; padding:7px 18px; cursor:pointer; font-size:13px; }
@@ -84,12 +122,23 @@
   .calgrid { display:grid; grid-template-columns:repeat(7,1fr); gap:2px; }
   .calgrid .dow { text-align:center; color:var(--muted); font-size:11px; padding:4px 0; }
   .calday { text-align:center; padding:6px 0; font-size:12px; border-radius:6px; cursor:pointer; color:var(--text); }
-  .calday.dim { color:#3d4660; }
-  .calday:hover:not(.dim):not(.future) { background:rgba(43,108,246,.15); }
+  .calday.dim { color:var(--dim); }
+  .calday:hover:not(.dim):not(.future) { background:var(--tint); }
   .calday.sel { background:var(--accent); color:#fff; }
-  .calday.inrange { background:rgba(43,108,246,.12); color:var(--text); }
-  .calday.future { color:#2e3650; cursor:default; }
+  .calday.inrange { background:var(--tintsoft); color:var(--text); }
+  .calday.future { color:var(--future); cursor:default; }
 </style>
+<script>
+// Runs before first paint: a light-preference visitor would otherwise see a dark flash.
+(function(){
+  try {
+    var t = localStorage.getItem('au-theme');
+    if (t !== 'light' && t !== 'dark')
+      t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    document.documentElement.dataset.theme = t;
+  } catch (e) { document.documentElement.dataset.theme = 'dark'; }
+})();
+</script>
 </head>
 <body>
 
@@ -98,6 +147,7 @@
   <div class="ctrl">
     <button class="iconbtn" id="refreshBtn" title="立即刷新">⟳ 刷新</button>
     <button class="iconbtn" id="autoBtn" title="切换自动刷新">⏱ <span id="autoLabel">30s</span></button>
+    <button class="iconbtn" id="themeBtn" title="切换亮色/暗色">☀ 亮色</button>
   </div>
   <span class="gran" id="dim">
     <button data-d="src" class="active">按来源</button>
@@ -148,6 +198,7 @@
   </section>
   <p class="muted" style="font-size:12px" id="footnote"></p>
 </main>
+<div class="tip" id="tip" hidden></div>
 <script>
 
 const COLOR_HEX = {
@@ -183,6 +234,9 @@ function modelName(alias){
 const fmtN = n => n >= 1e9 ? (n/1e9).toFixed(2)+'B'
                : n >= 1e6 ? (n/1e6).toFixed(1)+'M'
                : n >= 1e3 ? (n/1e3).toFixed(1)+'K' : String(n);
+
+const esc = s => String(s).replace(/[&<>"]/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 let DATA = null;
 let GRAN = 'day';
@@ -419,6 +473,7 @@ function render(){
       '<div class="s">' + why + '</div></div>';
     document.getElementById('legend').innerHTML = '';
     document.getElementById('chart').innerHTML = '';
+    hideTip();
     document.getElementById('tbl').innerHTML = '';
     document.getElementById('chartTitle').textContent = '输入 token';
     return;
@@ -491,6 +546,10 @@ function render(){
       : '');
 }
 
+const tipEl = document.getElementById('tip');
+let tipOn = -1;      // column index the tooltip/highlight currently belongs to
+let TIPCOLS = [];    // one tooltip HTML per column, rebuilt on every chart paint
+
 function drawChart(rows, rs){
   const W = 1300, H = 360, padL = 58, padB = 48, padT = 12, padR = 12;
   const iw = W - padL - padR, ih = H - padT - padB;
@@ -504,15 +563,17 @@ function drawChart(rows, rs){
   let g = '';
   for (let i = 0; i <= 4; i++) {
     const y = padT + ih - ih * i / 4;
-    g += '<line x1="'+padL+'" y1="'+y+'" x2="'+(W-padR)+'" y2="'+y+'" stroke="#2a3350" stroke-width="1"/>';
+    g += '<line class="grid" x1="'+padL+'" y1="'+y+'" x2="'+(W-padR)+'" y2="'+y+'"/>';
     g += '<text x="'+(padL-6)+'" y="'+(y+3)+'" text-anchor="end">'+fmtN(yMax*i/4)+'</text>';
   }
   const tickEvery = Math.max(1, Math.ceil(rows.length/26));
+  const tips = [];
   rows.forEach((r, i) => {
     const x = padL + slot*i + gap/2;
     const total = rs.reduce((s,rr)=>s+(r[rr.key+'In']||0),0);
+    const totalReq = rs.reduce((s,rr)=>s+(r[rr.key+'Req']||0),0);
     if (total === 0) {
-      g += '<line x1="'+x+'" y1="'+(padT+ih)+'" x2="'+(x+bw)+'" y2="'+(padT+ih)+'" stroke="#3a4360" stroke-width="2"><title>'+r.label+' 无数据</title></line>';
+      g += '<line class="stub" x1="'+x+'" y1="'+(padT+ih)+'" x2="'+(x+bw)+'" y2="'+(padT+ih)+'"/>';
     } else {
       let acc = 0, ci = 0;
       rs.forEach(rr => {
@@ -520,15 +581,52 @@ function drawChart(rows, rs){
         if (v <= 0) { ci++; return; }
         const h = ih * v / yMax;
         const yTop = padT + ih - ih * (acc + v) / yMax;
-        g += '<rect x="'+x+'" y="'+yTop+'" width="'+bw+'" height="'+h+'" fill="'+colorOf(rr.key,ci++)+'" rx="1"><title>'+r.label+' '+rr.label+' '+fmtN(v)+'</title></rect>';
+        g += '<rect class="seg" x="'+x+'" y="'+yTop+'" width="'+bw+'" height="'+h+'" fill="'+colorOf(rr.key,ci++)+'" rx="1"/>';
         acc += v;
       });
     }
+    // hover band spans the whole plot height, so a 2px bar is as easy to hit as a tall one
+    g += '<rect class="hit" data-i="'+i+'" x="'+x+'" y="'+padT+'" width="'+bw+'" height="'+ih+'"/>';
+    const items = rs.map((rr, j) => ({label:rr.label, color:colorOf(rr.key, j), v:r[rr.key+'In']||0}))
+                    .filter(o => o.v > 0).sort((a,b) => b.v - a.v);
+    tips.push('<div class="h">'+esc(r.label)+'</div>' + (items.length
+      ? items.map(o => '<div class="r"><span class="dot" style="background:'+o.color+'"></span>'+
+                       '<span class="n">'+esc(o.label)+'</span><span class="q">'+fmtN(o.v)+'</span></div>').join('') +
+        '<div class="s"><span>合计 '+fmtN(total)+'</span><span>请求 '+fmtN(totalReq)+'</span></div>'
+      : '<div class="r e">无数据</div>'));
     if (i % tickEvery === 0)
       g += '<text x="'+(x+bw/2)+'" y="'+(H-padB+14)+'" text-anchor="middle">'+(GRAN==='day'? r.key.slice(5) : r.label)+'</text>';
   });
+  TIPCOLS = tips;
   document.getElementById('chart').innerHTML =
     '<svg viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="xMidYMid meet">'+g+'</svg>';
+  hideTip();
+}
+
+function hideTip(){
+  tipEl.hidden = true;
+  tipOn = -1;
+  const on = document.querySelector('#chart .hit.on');
+  if (on) on.classList.remove('on');
+}
+
+function showTip(i, ev){
+  if (i !== tipOn) {
+    if (!TIPCOLS[i]) { hideTip(); return; }
+    tipEl.innerHTML = TIPCOLS[i];
+    const prev = document.querySelector('#chart .hit.on');
+    if (prev) prev.classList.remove('on');
+    const hit = document.querySelector('#chart .hit[data-i="'+i+'"]');
+    if (hit) hit.classList.add('on');
+    tipEl.hidden = false;
+    tipOn = i;
+  }
+  const box = tipEl.getBoundingClientRect();
+  let x = ev.clientX + 16, y = ev.clientY + 16;
+  if (x + box.width > innerWidth - 8) x = Math.max(8, ev.clientX - box.width - 16);
+  if (y + box.height > innerHeight - 8) y = Math.max(8, ev.clientY - box.height - 16);
+  tipEl.style.left = x + 'px';
+  tipEl.style.top  = y + 'px';
 }
 
 
@@ -607,6 +705,23 @@ function drawCal(){
 }
 
 // ---- events ----
+// Delegated: the hit bands are rebuilt on every repaint, so no per-element listeners.
+document.getElementById('chart').addEventListener('mousemove', e => {
+  const hit = e.target.closest ? e.target.closest('.hit') : null;
+  if (hit) showTip(+hit.dataset.i, e); else hideTip();
+});
+document.getElementById('chart').addEventListener('mouseleave', hideTip);
+document.getElementById('themeBtn').addEventListener('click', () => {
+  const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem('au-theme', next); } catch (e) {}
+  themeIcon();
+});
+function themeIcon(){
+  document.getElementById('themeBtn').textContent =
+    document.documentElement.dataset.theme === 'light' ? '🌙 暗色' : '☀ 亮色';
+}
+themeIcon();
 document.getElementById('gran').addEventListener('click', e => {
   if (e.target.dataset.g) {
     GRAN = e.target.dataset.g;
