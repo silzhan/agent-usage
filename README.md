@@ -16,8 +16,9 @@ Qoder CLI 本地记录的 usage 字段全为 0，本工具通过扫描会话转�
 python server.py [端口]     # 默认 8765
 ```
 
-打开 http://127.0.0.1:8765/ 。首次扫描约需 1 分钟，之后缓存 1 分钟；
-页面右上角"重新扫描"可强制刷新。
+打开 http://127.0.0.1:8765/ 。全量扫描约 25 秒（640 个转录文件，2026-10-13 实测 24.6s），之后缓存 1 分钟；
+增量扫描约 1 秒。页面右上角"重新扫描"可强制刷新。
+数据停在区间外的来源（如 Qoder 桌面端）不会显示成一根 0，卡片副标题会写明「记录在所选区间外，最新 YYYY-MM-DD」。
 
 也可以单独跑命令行版：
 
@@ -29,7 +30,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File collect.ps1
 
 ## 估算口径
 
-- 每个 assistant 请求按"重发全部前文上下文"计（与真实计费口径一致），单请求上下文封顶 60 万字符（≈200K token 窗口）
+- 每个 assistant 请求按"重发全部前文上下文"计（与真实计费口径一致）；单请求上下文按窗口封顶：
+  内置模型 200K token → `$CAP` = 200000/0.32 ≈ 62.5 万字符，BYOK（`qoder-custom-*`）默认 300K → ≈ 93.75 万字符（`-CustomWindowK` 可调）
 - 字符 → token 系数 0.32（中英混合代码场景约 3 字符/token），可在 `collect.ps1` 顶部调整 `$conv` / `$CAP`
 - 日期按 UTC 日切分（北京时间会晚 8 小时跨天）
 - 结果为估算：量级与分布可信，精确值以 Qoder 服务端为准
@@ -39,21 +41,25 @@ powershell -NoProfile -ExecutionPolicy Bypass -File collect.ps1
 工具栏的 **按来源 / 按模型** 切换复用同一套卡片、堆叠图、图例和明细表，只是把聚合轴从"来源"换成"模型"：
 把各来源每天的 `byModel` 跨来源合并成一个虚拟 root（同名模型在 Qoder / Claude Code / cc-switch 里出现几次都归一条）。
 
-- **模型名归一化**（`collect.ps1` 的 `NormModel`、`collect-ccswitch.py` 和 `collect-sqlite.py` 的 `norm_model`、`index.html` 的 `normModel` 四份实现必须逐字一致，已用 58 条向量交叉验证零差异）：
+- **模型名归一化**（`collect.ps1` 的 `NormModel`、`collect-ccswitch.py` 和 `collect-sqlite.py` 的 `norm_model`、`index.html` 的 `normModel` 四份实现必须逐字一致；2026-10-13 用 47 条向量做四路交叉校验，逐份两两相等、零差异）：
   转小写 → 取最后一个 `/` 之后的部分（`anthropic/claude-3-5-sonnet-20241022` → `claude-3-5-sonnet`）
   → 去尾部日期 `-([a-z]{1,4})?-[0-9]{4,8}`（`gpt-4o-20250801` → `gpt-4o`、`deepseek-v4-flash-0731` → `deepseek-v4-flash`）
   → 去尾部分隔符；空值和 Claude 的 `<synthetic>` 都落到 `unknown`。
   不做别名合并（`k3` 与 `kimi-k3` 各自成条），因为猜错别名会把两个真实模型并成一条假数据。
+  —— 四份实现只在"去前缀/去日期"这一步保持一致；**别名→产品名不在这里做**，见下一节。
 - **Top-7 + 其他**：按输入 token 取前 7 个模型，其余并入 `其他`，正好用完现有 8 个配色；`其他` 可能混合真实值与估算，标记为"混合"。
   切标签页或改日期区间会重算 Top-7（排序带模型名 tie-break，保证图例、图表、表格选出的那 7 个一致）。
 - **成本只来自 cc-switch**：其它来源没有可靠单价，一律不估价。所以 `真实值` ≠ 一定有 `$`——本地转录有真实 token 但无金额，
   只有 cc-switch 覆盖的模型才带 `total_cost_usd`。cc-switch 的聚合止于清理前最后一天，若日期区间没覆盖到它，模型视图不会出现任何 `$`。
-- 采集状态文件升到 `version 7`，首次运行会全量重扫一次（约 20 秒 / 数百文件），之后仍是约 1 秒的增量扫描。
+- 采集状态文件升到 `version 7`，首次运行会全量重扫一次（约 25 秒 / 640 个文件），之后是约 1 秒的增量扫描。
 
 ### Qoder 模型别名 → 产品名
 
-转录里的 `"model"` **只记选择器别名**，不是模型名：`efficient` 39,848 次、`qmodel_preview` 5,021 次、
-`lite` 3,951 次、`qmodel_latest` 3,574 次、`qfmodel` 2,627 次、`gfmodel` 2,329 次……
+转录里的 `"model"` **多数记的是选择器别名、不是模型名**（2026-10-13 本机 intl+cn 全量：92,670 次请求、14 个键）。
+需要映射还原的 10 个：`efficient` 38,277、`qmodel_preview` 4,873、`lite` 3,884、`qmodel_latest` 3,505、
+`qfmodel` 2,982、`gfmodel` 2,227、`gm51model` 1,030、`dmodel` 416、`dfmodel` 116、`auto` 2。
+不需要映射的 4 个本来就是归一化后的型号名：`deepseek-v4.1-flash` 34,911、`deepseek-v4-flash` 360、
+`glm-5.3-flash` 40、`unknown` 47——BYOK / 直连模型记的就是真名。
 真名也不在 `~\.qoder\.models\<uid>\catalog-v6` 里（那份是加密的：base64 解出 67,445 字节，无 gzip/zlib 头）。
 
 可用的明文来源是 **`~\.qoder{,-cn}\.auth\dynamic-texts.json`**——模型选择器的界面文案，
@@ -66,7 +72,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File collect.ps1
   合成一行（实测 424,374,880 = 297,353,704 + 127,021,176）。全量数据里共 4 组会合并：
   `glm-5.3-flash`、`glm-5.2`、`deepseek-v4-pro`、`deepseek-flash`。图例和卡片用浅色标出贡献了哪些别名。
 - ⚠️ **档位不是模型**：`efficient` / `lite` / `ultimate` / `auto` / `performance` / `fast` 是"经济/轻量/极致/自动"档位，
-  服务端每次可能路由到不同底座，还原不出具体型号。`efficient` 恰是最大头（39,848 次、6.02B 输入），
+  服务端每次可能路由到不同底座，还原不出具体型号。`efficient` 恰是最大头（38,277 次、6.02B 输入），
   这部分永远只能是档位名。
 - ⚠️ 这是**产品对外名称**，不等于 provider 上游型号；`modelSelector.item.<别名>.description` 里偶尔带日期，比标题更准
   （`dmodel` → 描述写 DeepSeek-V4-Pro-0813，`qmodel_38max` → Qwen3.8-Max-0902）。
@@ -80,8 +86,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File collect.ps1
 | `collect-sqlite.py` | 读取 SQLite 直存的来源（ZCode `~\.zcode\cli\db\db.sqlite`、Qoder 桌面端 `%APPDATA%\Qoder\...\local.db`），全部以 `mode=ro` 打开 |
 | `server.py` | 本地 Web 服务（仅 Python 标准库），合并上述三个采集源并去重 |
 | `index.html` | 看板页面（原生 SVG 图表，无 CDN 依赖） |
+| `start.bat` | 双击启动：先开浏览器再拉起 `server.py`（浏览器地址写死 8765，传别的端口需自己改 URL） |
 | `cache.json` | 最近一次扫描结果缓存（自动生成） |
-| `files-state.json` | 增量扫描状态（自动生成） |
+| `files-state.json` | 增量扫描状态（自动生成，`version` 变更时整体作废重扫） |
 
 ## 数据源说明
 
