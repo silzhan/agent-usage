@@ -2,3 +2,5 @@
 cache.json
 files-state.json
 dashboard.png
+__pycache__/
+server.log

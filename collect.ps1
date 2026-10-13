@@ -13,7 +13,7 @@ $conv = 0.32      # chars -> tokens (mixed cn/en/code)
 $CAP  = [long](200000 / $conv)             # qoder built-in models: 200K token window -> ~625K chars
 $CAPC = [long]($CustomWindowK * 1000 / $conv)  # BYOK (qoder-custom-*) models: default 300K tokens
 $MaxCap = [Math]::Max($CAP, $CAPC)
-$StateVersion = 6   # bump when estimation logic changes (invalidates old cache)
+$StateVersion = 7   # bump when estimation logic changes (invalidates old cache)
 $StatePath = Join-Path $PSScriptRoot 'files-state.json'
 
 # Must stay behaviourally identical to normModel() in index.html and norm_model() in
@@ -44,8 +44,10 @@ $roots = @(
   @{ key = 'cn';   label = 'Qoder CLI 国内版 (.qoder-cn)'; path = "$env:USERPROFILE\.qoder-cn\projects"; real = $false },
   # Claude Code transcripts record REAL usage tokens -> direct sum, no estimation/cap
   @{ key = 'cc';   label = 'Claude Code (.claude)';        path = "$env:USERPROFILE\.claude\projects"; real = $true },
-  # CodeBuddy: real usage (input_tokens/output_tokens), epoch-ms timestamps
+  # CodeBuddy: real usage (providerData.usage camel keys), epoch-ms timestamps
   @{ key = 'codebuddy'; label = 'CodeBuddy (.codebuddy)';  path = "$env:USERPROFILE\.codebuddy\projects"; real = $true },
+  # WorkBuddy writes the same record schema as CodeBuddy, so it shares the branch below
+  @{ key = 'workbuddy'; label = 'WorkBuddy (.workbuddy)';  path = "$env:USERPROFILE\.workbuddy\projects"; real = $true },
   # Cline CLI: per-session *.messages.json with metrics.inputTokens/outputTokens + epoch-ms ts
   @{ key = 'cline'; label = 'Cline CLI (.cline)'; path = "$env:USERPROFILE\.cline\data\sessions"; real = $true; filter = '*.messages.json' },
   # Cline VSCode extension (older): per-task api_conversation_history.json with metrics.tokens
@@ -153,16 +155,24 @@ foreach ($r in $roots) {
         Add-Model $days[$d].m (NormModel $o.model) $rq $rp $rc
         continue
       }
-      # CodeBuddy: type:"message" role:"assistant", epoch-ms timestamp, real usage
-      if ($r.key -eq 'codebuddy') {
-        if ($line -like '*"role":"assistant"*' -and $line -match '"input_tokens":(\d+)[^}]*?"output_tokens":(\d+)') {
-          $inT = [long]$matches[1]; $outT = [long]$matches[2]
+      # CodeBuddy / WorkBuddy: gate on the usage keys, never on role -- tool-call turns are written as
+      # type:"function_call" with no role field and carry most of the usage. inputTokens already
+      # includes cache hits (cached_tokens is a subset), so don't add cache fields like the Claude
+      # branch. camel / message.usage snake / rawUsage hold the same numbers; take exactly one.
+      if ($r.key -eq 'codebuddy' -or $r.key -eq 'workbuddy') {
+        # [regex]::Match, not two chained -match: the second -match overwrites $matches, which
+        # would feed outputTokens into $inT and leave $matches[2] ($outT) null.
+        $cbIn = [regex]::Match($line, '"inputTokens":(\d+)')
+        $cbOut = [regex]::Match($line, '"outputTokens":(\d+)')
+        if ($cbIn.Success -and $cbOut.Success) {
+          $inT = [long]$cbIn.Groups[1].Value; $outT = [long]$cbOut.Groups[1].Value
           $d = 'unknown'
           if ($line -match '"timestamp":(\d{13})') {
             $d = [DateTimeOffset]::FromUnixTimeMilliseconds([long]$matches[1]).UtcDateTime.ToString('yyyy-MM-dd')
           }
+          # [^}]* can't cross the '}' embedded in providerData.reasoning; anchor on the next key
           $rawM = ''
-          if ($line -match '"providerData":\{[^}]*"model":"([^"]*)"') { $rawM = $matches[1] }
+          if ($line -match '"model":"([^"]+)","requestModelId"') { $rawM = $matches[1] }
           if (-not $days[$d]) { $days[$d] = @{ req = 0; inC = [long]0; outC = [long]0; m = @{} } }
           $days[$d].req++
           $days[$d].inC += $inT

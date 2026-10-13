@@ -55,8 +55,10 @@ def main():
     con = sqlite3.connect(DB)
     roots = []
     for app, (key, label) in APPS.items():
+        # `request_model` is a proxy_request_logs column, not one of these -- selecting it made
+        # this query throw and server.py's except-swallow turned it into an empty roots[].
         rows = con.execute(
-            "SELECT date, COALESCE(NULLIF(model,''), NULLIF(request_model,''), 'unknown') AS m,"
+            "SELECT date, COALESCE(NULLIF(model,''), 'unknown') AS m,"
             "       SUM(request_count), SUM(success_count),"
             "       SUM(input_tokens), SUM(output_tokens),"
             "       SUM(cache_read_tokens), SUM(cache_creation_tokens),"

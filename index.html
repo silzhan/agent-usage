@@ -56,9 +56,11 @@
   th { color:var(--muted); font-weight:600; }
   tr.nodata td { color:#4a5470; }
   .muted { color:var(--muted); }
-  .picker { position:absolute; top:64px; left:24px; z-index:50; background:var(--panel);
+  /* fixed, not absolute: the topbar is sticky, so a document-relative popover would
+     scroll away from the button it belongs to. placePicker() sets top/left. */
+  .picker { position:fixed; z-index:50; background:var(--panel);
             border:1px solid var(--border); border-radius:14px; padding:16px;
-            box-shadow:0 12px 40px rgba(0,0,0,.5); width:620px; }
+            box-shadow:0 12px 40px rgba(0,0,0,.5); width:620px; max-width:calc(100vw - 24px); }
   .picker[hidden] { display:none; }
   .presets { display:flex; gap:8px; margin-bottom:14px; flex-wrap:wrap; }
   .presets button { background:var(--panel2); border:1px solid var(--border); color:var(--text);
@@ -151,7 +153,8 @@
 const COLOR_HEX = {
   intl:'#4f8ef7', cn:'#3ecf8e', cc:'#f7b84f',
   'ccs-claude':'#f28e3c', 'ccs-codex':'#b48ef7', 'ccs-gemini':'#5cc8e8', 'ccs-opencode':'#e85c8a',
-  'codebuddy':'#d4e157', 'cline':'#7986cb', 'cline-vsc':'#9fa8da', 'reasonix':'#a1887f'
+  'codebuddy':'#d4e157', 'workbuddy':'#4ec9b0', 'cline':'#7986cb', 'cline-vsc':'#9fa8da', 'reasonix':'#a1887f',
+  'zcode':'#e5484d', 'qoder-ide':'#8fa1b3'
 };
 const PALETTE = ['#4f8ef7','#3ecf8e','#f7b84f','#b48ef7','#e85c8a','#5cc8e8','#9fef4f','#ef9f4f'];
 const colorOf = (key, idx) => COLOR_HEX[key] || PALETTE[idx % PALETTE.length];
@@ -170,6 +173,13 @@ function normModel(s){
 }
 // 其他 makes it exactly PALETTE.length segments, so no model shares a colour
 const MODEL_TOPN = PALETTE.length - 1;
+// Selector alias -> product name, supplied by server.py from ~/.qoder*/.auth/dynamic-texts.json.
+// Display-only: the aggregation key stays the alias, so swapping bundles needs no rescan.
+function modelName(alias){
+  const m = (DATA && DATA.modelNames) || {};
+  const v = m[alias];
+  return v && v !== alias ? v : alias;
+}
 const fmtN = n => n >= 1e9 ? (n/1e9).toFixed(2)+'B'
                : n >= 1e6 ? (n/1e6).toFixed(1)+'M'
                : n >= 1e3 ? (n/1e3).toFixed(1)+'K' : String(n);
@@ -194,6 +204,8 @@ async function load(force) {
     buildTabs();
     render();
     st.textContent = d.scanning ? '后台重扫中，显示缓存结果' : '更新于 ' + (d.generatedAt||'');
+    // a collector that crashed returns no roots at all -- say so instead of showing fewer tabs
+    if ((d.collectorErrors||[]).length) st.textContent += '  ⚠ 采集失败: ' + d.collectorErrors.join('; ');
   } catch (e) { st.textContent = '加载失败: ' + e; }
 }
 
@@ -208,10 +220,14 @@ function* eachDay(from,to){ let s=from; while(s<=to){ yield s; s=addDays(s,1); }
 // ---- app family grouping for tabs ----
 function appOf(r){
   const l = r.label;
+  // SQLite roots carry Chinese/short labels, so key on the stable id instead of the label
+  if (r.key === 'qoder-ide') return 'Qoder 桌面端';
+  if (r.key === 'zcode') return 'ZCode';
   if (/claude/i.test(l)) return 'Claude Code';
   if (/codex/i.test(l))  return 'Codex';
   if (/gemini/i.test(l)) return 'Gemini';
   if (/opencode/i.test(l)) return 'OpenCode';
+  if (/workbuddy/i.test(l)) return 'WorkBuddy';
   if (/codebuddy/i.test(l)) return 'CodeBuddy';
   if (/reasonix/i.test(l)) return 'Reasonix';
   if (/cline/i.test(l)) return 'Cline';
@@ -231,8 +247,15 @@ function buildModelRoots(src, rng){
     if (!bm || typeof bm !== 'object') return;
     Object.keys(bm).forEach(raw => {
       const v = bm[raw] || {};
-      const model = normModel(raw);
-      const a = acc[model] || (acc[model] = {req:0,in:0,out:0,cost:0,costSeen:false,days:{},reals:{}});
+      const alias = normModel(raw);
+      // Bucket on the product name, not the alias: cc-switch records `glm-5.3-flash` while
+      // the Qoder transcript records `gfmodel` for the same model, and keeping them apart
+      // splits one model across two rows (and two Top-7 slots).
+      const disp = modelName(alias);
+      const model = normModel(disp);
+      const a = acc[model] || (acc[model] = {req:0,in:0,out:0,cost:0,costSeen:false,days:{},reals:{},aliases:{},disp:''});
+      a.aliases[alias] = true;
+      if (disp !== alias && !a.disp) a.disp = disp;
       const t = a.days[d.day] || (a.days[d.day] = {req:0,in:0,out:0,cost:0,costSeen:false});
       t.req += v.requests||0; t.in += v.inTokens||0; t.out += v.outTokens||0;
       a.req += v.requests||0; a.in += v.inTokens||0; a.out += v.outTokens||0;
@@ -251,13 +274,14 @@ function buildModelRoots(src, rng){
   list.sort((x,y) => (y.a.in - x.a.in) || (x.model < y.model ? -1 : x.model > y.model ? 1 : 0));
   const keep = list.slice(0, MODEL_TOPN), rest = list.slice(MODEL_TOPN);
   if (rest.length) {
-    const m = {req:0,in:0,out:0,cost:0,costSeen:false,days:{},reals:{}};
+    const m = {req:0,in:0,out:0,cost:0,costSeen:false,days:{},reals:{},aliases:{},disp:''};
     rest.forEach(x => {
       const a = x.a;
       m.req += a.req; m.in += a.in; m.out += a.out; m.cost += a.cost;
       if (a.costSeen) m.costSeen = true;
       if (a.reals.real) m.reals.real = true;
       if (a.reals.est)  m.reals.est = true;
+      Object.keys(a.aliases || {}).forEach(k => m.aliases[k] = true);
       Object.keys(a.days).forEach(day => {
         const t = m.days[day] || (m.days[day] = {req:0,in:0,out:0,cost:0,costSeen:false});
         const s = a.days[day];
@@ -269,7 +293,8 @@ function buildModelRoots(src, rng){
   }
   const r2 = v => Math.round(v*100)/100;
   return keep.map(x => ({
-    key: 'm:' + x.model, label: x.model,
+    key: 'm:' + x.model, label: x.a.disp || x.model,
+    alias: Object.keys(x.a.aliases || {}).sort().join(' '),
     kind: x.a.reals.real && x.a.reals.est ? '混合' : (x.a.reals.real ? '真实值' : '估算'),
     real: !!x.a.reals.real && !x.a.reals.est,
     sessions: null,
@@ -400,17 +425,25 @@ function render(){
   }
 
   // legend
+  const aliasTag = r => (r.alias && r.alias !== r.label)
+    ? '<span style="opacity:.45;font-size:11px"> '+r.alias+'</span>' : '';
   document.getElementById('legend').innerHTML = rs.map((r,i) =>
-    '<span><span class="dot" style="background:'+colorOf(r.key,i)+'"></span>'+r.label+
+    '<span><span class="dot" style="background:'+colorOf(r.key,i)+'"></span>'+r.label+aliasTag(r)+
     '<span class="tag">'+(kindTag(r))+(r.costUsd!=null?' $'+r.costUsd:'')+'</span></span>').join('');
 
   // cards: range totals per root + grand total
   const sum = (arr,f) => arr.reduce((a,x)=>a+(x[f]||0),0);
   const cards = rs.map((r,i) => {
-    const inR = (r.days||[]).filter(d=>d.day>=rng[0]&&d.day<=rng[1]);
+    const all = r.days||[];
+    const inR = all.filter(d=>d.day>=rng[0]&&d.day<=rng[1]);
     const inT = sum(inR,'inTokens'), outT = sum(inR,'outTokens'), req = sum(inR,'requests');
+    // Qoder 桌面端 / WorkBuddy stop producing records months ago, so their tab would
+    // otherwise read as a flat zero and look broken rather than simply out of range
+    const last = all.reduce((m,d)=>d.day>m?d.day:m, '');
+    const away = (all.length && !inR.length) ? ' · 记录在所选区间外，最新 '+last : '';
     return card(r.label+' 输入', fmtN(inT),
-      '输出 '+fmtN(outT)+' · 请求 '+fmtN(req)+' · '+kindTag(r), colorOf(r.key,i));
+      '输出 '+fmtN(outT)+' · 请求 '+fmtN(req)+' · '+kindTag(r)+away+
+      (r.alias && r.alias !== r.label ? ' · 转录键 '+r.alias : ''), colorOf(r.key,i));
   });
   const tot = rs.reduce((s,r)=>{
     (r.days||[]).filter(d=>d.day>=rng[0]&&d.day<=rng[1]).forEach(d=>{ s.in+=d.inTokens; s.out+=d.outTokens; s.req+=d.requests; });
@@ -425,7 +458,12 @@ function render(){
 
   const z = v => v ? fmtN(v) : '—';
   const gLabel = {day:'日期(UTC)', week:'周（周一）', month:'月'}[GRAN];
-  let html = '<tr><th>'+gLabel+'</th>' + rs.map(r => '<th>'+r.label+'请求</th><th>'+r.label+'输入</th>').join('') +
+  // several aliases share one product name (qmodel & dashscope_qmodel → Qwen3.7-Plus), so
+  // only the colliding columns carry the alias
+  const dupLbl = {};
+  rs.forEach(r => dupLbl[r.label] = (dupLbl[r.label]||0) + 1);
+  const colLbl = r => (r.alias && dupLbl[r.label] > 1) ? r.label + '(' + r.alias + ')' : r.label;
+  let html = '<tr><th>'+gLabel+'</th>' + rs.map(r => '<th>'+colLbl(r)+'请求</th><th>'+colLbl(r)+'输入</th>').join('') +
       '<th>合计输入</th><th>无数据</th></tr>';
   rows.forEach(r => {
     let tot2 = 0, anyReq = 0;
@@ -440,10 +478,14 @@ function render(){
 
   document.getElementById('footnote').textContent =
     'Qoder CLI 本地 usage 为 0，其数据为字符估算（内置 200K / BYOK '+(DATA.customWindowK||300)+'K 窗口，≈0.32 token/字符）；' +
-    'Claude Code / CodeBuddy / Cline / Reasonix 转录含真实 usage；cc-switch 汇总来自 ~/.cc-switch/cc-switch.db（含 USD 成本），' +
+    'Claude Code / CodeBuddy / WorkBuddy / Cline / Reasonix 转录含真实 usage；ZCode 取 ~/.zcode/cli/db/db.sqlite 的 model_usage 表' +
+    '（不含划词 side-chat），Qoder 桌面端取 %APPDATA%/Qoder 的 chat_message；cc-switch 汇总来自 ~/.cc-switch/cc-switch.db（含 USD 成本），' +
     '与本地转录重叠日期已去重。默认显示最近 30 天。' +
+    'Trae / Trae CN / TRAE SOLO CN 不在看板里：会话与 token 全在 SQLCipher 加密库，明文存储（Local Storage / IndexedDB / state.vscdb）里一条消息都没有，无文本可估。' +
     (DIM === 'model'
       ? ' 按模型：模型名取自各转录的 model 字段，已去掉 provider 前缀与日期后缀（deepseek-v4-flash-0731 → deepseek-v4-flash），'
+        + 'Qoder 内置模型在转录里只记选择器别名，产品名由 ~/.qoder*/.auth/dynamic-texts.json 映射（qfmodel → Qwen3.8-Flash），'
+        + '别名以浅色标在旁边；efficient / lite / ultimate / auto 是档位不是某个模型，还原不出具体型号。'
         + '缺失或 <synthetic> 归入 unknown；柱图只列输入 token 前 '+MODEL_TOPN+' 名，其余并入「其他」。'
         + '成本仅 cc-switch 覆盖的模型有真实 USD，其它来源不估价。'
       : '');
@@ -497,6 +539,12 @@ let pStart = '', pEnd = '';
 let calY = 0, calM = 0;
 let calFirst = null;
 
+function placePicker(){
+  const p = document.getElementById('picker');
+  const r = document.getElementById('rangeBtn').getBoundingClientRect();
+  p.style.top = (r.bottom + 8) + 'px';
+  p.style.left = Math.max(12, Math.min(r.right - p.offsetWidth, window.innerWidth - p.offsetWidth - 12)) + 'px';
+}
 function openPicker(){
   const sp = dataSpan(); if (!sp) return;
   const rng = effRange();
@@ -507,6 +555,7 @@ function openPicker(){
   document.getElementById('endIn').value = pEnd;
   document.getElementById('calDow').innerHTML = DOW.map(x=>'<div class="dow">'+x+'</div>').join('');
   document.getElementById('picker').hidden = false;
+  placePicker();
   drawCal();
 }
 function closePicker(){ document.getElementById('picker').hidden = true; }
@@ -576,6 +625,8 @@ document.getElementById('rangeBtn').addEventListener('click', () => {
   const p = document.getElementById('picker');
   if (p.hidden) { calFirst = null; openPicker(); } else closePicker();
 });
+// the topbar wraps, so a resize moves the button out from under an open picker
+window.addEventListener('resize', () => { if (!document.getElementById('picker').hidden) placePicker(); });
 document.getElementById('cancelBtn').addEventListener('click', closePicker);
 document.getElementById('okBtn').addEventListener('click', () => {
   FROM = document.getElementById('startIn').value;
