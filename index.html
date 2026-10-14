@@ -94,6 +94,9 @@
   th { color:var(--muted); font-weight:600; }
   tr.nodata td { color:var(--nodatarow); }
   .muted { color:var(--muted); }
+  /* the footnote is one bullet per source, not a run-on paragraph */
+  .fn ul { margin:0; padding-left:18px; }
+  .fn li { margin:3px 0; }
   /* fixed, not absolute: the topbar is sticky, so a document-relative popover would
      scroll away from the button it belongs to. placePicker() sets top/left. */
   .picker { position:fixed; z-index:50; background:var(--panel);
@@ -196,7 +199,7 @@
     <h2>明细</h2>
     <div style="overflow-x:auto"><table id="tbl"></table></div>
   </section>
-  <p class="muted" style="font-size:12px" id="footnote"></p>
+  <div class="muted fn" style="font-size:12px" id="footnote"></div>
 </main>
 <div class="tip" id="tip" hidden></div>
 <script>
@@ -531,19 +534,24 @@ function render(){
   });
   document.getElementById('tbl').innerHTML = html;
 
-  document.getElementById('footnote').textContent =
-    'Qoder CLI 本地 usage 为 0，其数据为字符估算（内置 200K / BYOK '+(DATA.customWindowK||300)+'K 窗口，≈0.32 token/字符）；' +
-    'Claude Code / CodeBuddy / WorkBuddy / Cline / Reasonix 转录含真实 usage；ZCode 取 ~/.zcode/cli/db/db.sqlite 的 model_usage 表' +
-    '（不含划词 side-chat），Qoder 桌面端取 %APPDATA%/Qoder 的 chat_message；cc-switch 汇总来自 ~/.cc-switch/cc-switch.db（含 USD 成本），' +
-    '与本地转录重叠日期已去重。默认显示最近 30 天。' +
-    'Trae / Trae CN / TRAE SOLO CN 不在看板里：会话与 token 全在 SQLCipher 加密库，明文存储（Local Storage / IndexedDB / state.vscdb）里一条消息都没有，无文本可估。' +
-    (DIM === 'model'
-      ? ' 按模型：模型名取自各转录的 model 字段，已去掉 provider 前缀与日期后缀（deepseek-v4-flash-0731 → deepseek-v4-flash），'
-        + 'Qoder 内置模型在转录里只记选择器别名，产品名由 ~/.qoder*/.auth/dynamic-texts.json 映射（qfmodel → Qwen3.8-Flash），'
-        + '别名以浅色标在旁边；efficient / lite / ultimate / auto 是档位不是某个模型，还原不出具体型号。'
-        + '缺失或 <synthetic> 归入 unknown；柱图只列输入 token 前 '+MODEL_TOPN+' 名，其余并入「其他」。'
-        + '成本仅 cc-switch 覆盖的模型有真实 USD，其它来源不估价。'
-      : '');
+  const fnItems = [
+    'Qoder CLI 本地 usage 为 0，其数据为字符估算（内置 200K / BYOK ' + (DATA.customWindowK || 300) + 'K 窗口，≈0.32 token/字符）。',
+    'Claude Code / CodeBuddy / WorkBuddy / Cline / Reasonix：转录含真实 usage。',
+    'ZCode：取 ~/.zcode/cli/db/db.sqlite 的 model_usage 表（不含划词 side-chat）。',
+    'Qoder 桌面端：取 %APPDATA%/Qoder 的 chat_message。',
+    'cc-switch：汇总来自 ~/.cc-switch/cc-switch.db（含 USD 成本），与本地转录重叠日期已去重。',
+    'Trae / Trae CN / TRAE SOLO CN 不在看板里：会话与 token 全在 SQLCipher 加密库，'
+      + '明文存储（Local Storage / IndexedDB / state.vscdb）里一条消息都没有，无文本可估。',
+  ];
+  if (DIM === 'model') fnItems.push(
+    '按模型：模型名取自各转录的 model 字段，已去掉 provider 前缀与日期后缀（deepseek-v4-flash-0731 → deepseek-v4-flash）。',
+    'Qoder 内置模型在转录里只记选择器别名，产品名由 ~/.qoder*/.auth/dynamic-texts.json 映射（qfmodel → Qwen3.8-Flash），别名以浅色标在旁边。',
+    'efficient / lite / ultimate / auto 是档位不是某个模型，还原不出具体型号。',
+    '缺失或 <synthetic> 归入 unknown；柱图只列输入 token 前 ' + MODEL_TOPN + ' 名，其余并入「其他」。',
+    '成本仅 cc-switch 覆盖的模型有真实 USD，其它来源不估价。',
+  );
+  document.getElementById('footnote').innerHTML =
+    '<ul>' + fnItems.map(s => '<li>' + esc(s) + '</li>').join('') + '</ul>';
 }
 
 const tipEl = document.getElementById('tip');
