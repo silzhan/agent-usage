@@ -522,17 +522,29 @@ function render(){
   document.getElementById('tbl').innerHTML = html;
 
   const fnItems = [
-    'Qoder CLI 本地 usage 为 0，其数据为字符估算（内置 200K / BYOK ' + (DATA.customWindowK || 300) + 'K 窗口，≈0.32 token/字符）。',
-    'Claude Code / CodeBuddy / WorkBuddy / Cline / Reasonix：转录含真实 usage。',
-    'ZCode：取 ~/.zcode/cli/db/db.sqlite 的 model_usage 表（不含划词 side-chat）。',
-    'Qoder 桌面端：取 %APPDATA%/Qoder 的 chat_message。',
-    'cc-switch：汇总来自 ~/.cc-switch/cc-switch.db（含 USD 成本），与本地转录重叠日期已去重。',
+    '日期一律按 UTC 日切分（北京时间比 UTC 早 8 小时，跨天会落到前一日）。',
+    'Qoder CLI 本地 usage 为 0，其数据为字符估算：每个请求按重发全部前文上下文计，单请求按窗口封顶'
+      + '（内置 200K / BYOK ' + (DATA.customWindowK || 300) + 'K，≈0.32 token/字符）。',
+    'Claude Code：转录含真实 usage，输入侧 = input_tokens + cache_creation + cache_read。',
+    'CodeBuddy / WorkBuddy：转录含真实 usage，inputTokens 已含缓存命中，不再叠加。',
+    'Cline（CLI / VSCode 插件）：metrics 含真实 usage（inputTokens / tokens.prompt 取其一）。',
+    'Reasonix：逐请求 stats 含真实 usage，prompt 已含 cache_hit + cache_miss。',
+    'ZCode：取 ~/.zcode/cli/db/db.sqlite 的 model_usage 表（input_tokens 已含缓存，不含划词 side-chat）。',
+    'Qoder 桌面端：取 %APPDATA%/Qoder 的 chat_message（prompt_tokens 已含缓存）；库不存在时该来源不出现。',
+    'cc-switch：取 ~/.cc-switch/cc-switch.db 的日聚合，输入侧 = prompt + cache read + cache write，含 USD 成本；与本地转录重叠日期已去重。',
+    'AtomCode：取 ~/.atomcode/sessions；已结束会话读 <id>.meta（输入侧 = input + cached_input，两字段不重叠），'
+      + '进行中的会话读 <id>.events（prompt 已含缓存）。日期优先用记录时间，其次 datalog 文件名，最后会话 updated_at。',
+    'DSH：取 ~/.dsh/sessions 的 zstd 事件流（多帧拼接，需本机 Node 解压）；输入侧 = inputTokens + cacheReadTokens'
+      + '（inputTokens 不含缓存），模型按该步之前最近的 request/context 事件归属。',
+    'OpenCode / Gemini 仍照常采集，只是按需从页面隐藏（server.py 的 HIDDEN_SOURCE_KEYS）。',
     'Trae / Trae CN / TRAE SOLO CN 不在看板里：会话与 token 全在 SQLCipher 加密库，'
       + '明文存储（Local Storage / IndexedDB / state.vscdb）里一条消息都没有，无文本可估。',
   ];
   if (DIM === 'model') fnItems.push(
-    '按模型：模型名取自各转录的 model 字段，已去掉 provider 前缀与日期后缀（deepseek-v4-flash-0731 → deepseek-v4-flash）。',
-    'Qoder 内置模型在转录里只记选择器别名，产品名由 ~/.qoder*/.auth/dynamic-texts.json 映射（qfmodel → Qwen3.8-Flash），别名以浅色标在旁边。',
+    '按模型：模型名已去掉 provider 前缀与日期后缀（deepseek-v4-flash-0731 → deepseek-v4-flash），再按产品名合并同一模型。',
+    'Qoder 内置模型在转录里只记选择器别名，产品名由 ~/.qoder*/.auth/dynamic-texts.json 映射（qfmodel → Qwen3.8-Flash）；'
+      + 'AtomCode 的 glm5.3-flash 也并入 GLM-5.3-Flash；所有别名以浅色标在旁边。',
+    '按模型的合计由各来源每天的 byModel 逐项相加；估算来源按模型分别取整，与「按来源」合计可能相差几个 token。',
     'efficient / lite / ultimate / auto 是档位不是某个模型，还原不出具体型号。',
     '缺失或 <synthetic> 归入 unknown（固定灰色）；所有模型逐一列出（按输入 token 降序），不再合并成「其他」。',
     '成本仅 cc-switch 覆盖的模型有真实 USD，其它来源不估价。',
