@@ -1,6 +1,7 @@
 # agent-usage — AI CLI Token 用量看板
 
-多 AI 编程助手（Qoder CLI 国际/国内、Qoder 桌面端、Claude Code、CodeBuddy、WorkBuddy、Cline CLI/插件、Reasonix、Codex、Gemini、OpenCode、ZCode）的本地 token 用量统计与可视化。
+多 AI 编程助手（Qoder CLI 国际/国内、Qoder 桌面端、Claude Code、CodeBuddy、WorkBuddy、Cline CLI/插件、Reasonix、Codex、ZCode、AtomCode、DSH）的本地 token 用量统计与可视化。
+OpenCode 与 Gemini 仍在采集，但按需在看板上隐藏（见下方 `HIDDEN_SOURCE_KEYS`）。
 
 Qoder CLI 本地记录的 usage 字段全为 0，本工具通过扫描会话转录里的字符量来**估算** token 消耗，
 覆盖两个 CLI 目录：
@@ -41,14 +42,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File collect.ps1
 工具栏的 **按来源 / 按模型** 切换复用同一套卡片、堆叠图、图例和明细表，只是把聚合轴从"来源"换成"模型"：
 把各来源每天的 `byModel` 跨来源合并成一个虚拟 root（同名模型在 Qoder / Claude Code / cc-switch 里出现几次都归一条）。
 
-- **模型名归一化**（`collect.ps1` 的 `NormModel`、`collect-ccswitch.py` 和 `collect-sqlite.py` 的 `norm_model`、`index.html` 的 `normModel` 四份实现必须逐字一致；2026-10-13 用 47 条向量做四路交叉校验，逐份两两相等、零差异）：
+- **模型名归一化**（`collect.ps1` 的 `NormModel`、`collect-ccswitch.py` / `collect-sqlite.py` / `collect-atomcode.py` / `collect-dsh.py` 的 `norm_model`、`index.html` 的 `normModel` 六份实现必须逐字一致；2026-10-13 用 47 条向量做四路交叉校验，逐份两两相等、零差异）：
   转小写 → 取最后一个 `/` 之后的部分（`anthropic/claude-3-5-sonnet-20241022` → `claude-3-5-sonnet`）
   → 去尾部日期 `-([a-z]{1,4})?-[0-9]{4,8}`（`gpt-4o-20250801` → `gpt-4o`、`deepseek-v4-flash-0731` → `deepseek-v4-flash`）
   → 去尾部分隔符；空值和 Claude 的 `<synthetic>` 都落到 `unknown`。
   不做别名合并（`k3` 与 `kimi-k3` 各自成条），因为猜错别名会把两个真实模型并成一条假数据。
-  —— 四份实现只在"去前缀/去日期"这一步保持一致；**别名→产品名不在这里做**，见下一节。
-- **Top-7 + 其他**：按输入 token 取前 7 个模型，其余并入 `其他`，正好用完现有 8 个配色；`其他` 可能混合真实值与估算，标记为"混合"。
-  切标签页或改日期区间会重算 Top-7（排序带模型名 tie-break，保证图例、图表、表格选出的那 7 个一致）。
+  —— 六份实现只在"去前缀/去日期"这一步保持一致；**别名→产品名不在这里做**，见下一节。
+- **不再合并「其他」**（2026-10-18 起）：所有模型逐一列出，按输入 token 降序。前 8 个用固定的 8 色调色板，
+  第 9 个起用金色角旋转生成的深色系（亮度压到 45%，即使色相碰到调色板近似色也能区分）；`unknown` 固定灰色。
+  排序带模型名 tie-break，保证图例、图表、表格里的顺序一致。
 - **成本只来自 cc-switch**：其它来源没有可靠单价，一律不估价。所以 `真实值` ≠ 一定有 `$`——本地转录有真实 token 但无金额，
   只有 cc-switch 覆盖的模型才带 `total_cost_usd`。cc-switch 的聚合止于清理前最后一天，若日期区间没覆盖到它，模型视图不会出现任何 `$`。
 - 采集状态文件升到 `version 7`，首次运行会全量重扫一次（约 25 秒 / 640 个文件），之后是约 1 秒的增量扫描。
@@ -71,6 +73,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File collect.ps1
 - **按产品名分桶会合并同一模型**：cc-switch 记 `glm-5.3-flash`、Qoder 转录记 `gfmodel`，映射后是同一个模型，
   合成一行（实测 424,374,880 = 297,353,704 + 127,021,176）。全量数据里共 4 组会合并：
   `glm-5.3-flash`、`glm-5.2`、`deepseek-v4-pro`、`deepseek-flash`。图例和卡片用浅色标出贡献了哪些别名。
+- **手动补充映射**（`server.py` 的 `MODEL_ALIAS_FIXUPS`，2026-10-18 起）：AtomCode 把 GLM-5.3-Flash 记成
+  `glm5.3-flash`（glm 后少一个连字符），映射到同一产品名后与 cc-switch / ZCode / Qoder 的记录合并成一行。
+  再遇到同类跨来源拼写差异，往这个 dict 加一条即可——同样是展示层生效、无需重扫。
 - ⚠️ **档位不是模型**：`efficient` / `lite` / `ultimate` / `auto` / `performance` / `fast` 是"经济/轻量/极致/自动"档位，
   服务端每次可能路由到不同底座，还原不出具体型号。`efficient` 恰是最大头（38,277 次、6.02B 输入），
   这部分永远只能是档位名。
@@ -84,7 +89,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File collect.ps1
 | `collect.ps1` | 扫描转录文件（Qoder 国际/国内 + Claude Code 本地 + CodeBuddy / WorkBuddy / Cline / Reasonix），输出 JSON |
 | `collect-ccswitch.py` | 读取 cc-switch SQLite 数据库的日聚合用量（真实 token + 美元成本） |
 | `collect-sqlite.py` | 读取 SQLite 直存的来源（ZCode `~\.zcode\cli\db\db.sqlite`、Qoder 桌面端 `%APPDATA%\Qoder\...\local.db`），全部以 `mode=ro` 打开 |
-| `server.py` | 本地 Web 服务（仅 Python 标准库），合并上述三个采集源并去重 |
+| `collect-atomcode.py` | 读取 AtomCode 会话元数据（`~\.atomcode\sessions\*\*.meta` 的 turn_stats 真实 token；按轮次落日期，见下方数据源说明） |
+| `collect-dsh.py` | 读取 DSH 会话事件日志（`~\.dsh\sessions\*\*\session*.jsonl.zstd`；内嵌 Node 脚本解 zstd，**需要 `node` 在 PATH 上**） |
+| `server.py` | 本地 Web 服务（仅 Python 标准库），合并上述五个采集源、去重，并按 `HIDDEN_SOURCE_KEYS` 隐藏已关闭的来源 |
 | `index.html` | 看板页面（原生 SVG 图表，无 CDN 依赖） |
 | `start.bat` | 双击启动：先开浏览器再拉起 `server.py`（浏览器地址写死 8765，传别的端口需自己改 URL） |
 | `cache.json` | 最近一次扫描结果缓存（自动生成） |
@@ -104,6 +111,23 @@ powershell -NoProfile -ExecutionPolicy Bypass -File collect.ps1
   取 `role='assistant'` 行的 `token_info` JSON（`prompt_tokens` / `completion_tokens`），模型名在 `model_info`。
   注意这台机器上这份数据**停在 2026-06-03**，默认 30 天窗口内看不到，把日期范围放宽才有数字
 - **cc-switch 汇总**（`.cc-switch/cc-switch.db`）：cc-switch 在清理前预聚合的真实日用量，含 USD 成本，覆盖 Claude / Codex / Gemini / OpenCode——Claude Code 丢失的历史靠它补回；与本地转录重叠日期由 server.py 自动去重
+- **AtomCode**（`~\.atomcode\sessions\<proj>\<sid>.meta`）：真实 token。每轮的 `turn_stats[].model_usage[]` 带
+  `{model_id, tokens:{input, output, cached_input}}`；`input` 与 `cached_input` 互不重叠（本机逐轮验证 `used_tokens == input + cached_input`），
+  所以输入侧 = `input + cached_input`（与 cc-switch 同一计费口径，不要相加出双份缓存）。`.meta` 没有逐轮时间戳，日期按三级回退解析：
+  同目录 `<sid>.jsonl` 的同 turn_id 记录（`ts`/`iso`，UTC）→ `datalog\*\` 文件名里的本地墙钟时间（转 UTC）→ 会话 `updated_at`。
+  用 datalog 文件名时要求该会话 `tN` 编号恰好覆盖 `1..turn_count`——重试轮次会漂移编号（实测 5 个定位文件对 4 轮），
+  集合不吻合就整体退回天粒度，宁可粗日期也不给错日。只有 jsonl 的旧会话用 `usage:{prompt, completion, cached}`，
+  `prompt` 已含 cached，绝不叠加。
+  **正在进行的会话**（新版写 `.events`、会话结束才写 `.meta`）直接从事件日志采：`kind:"usage"` 事件带精确毫秒时间戳，
+  模型按 `(turn, round)` 配对 `request_header` 事件；`.meta` 一出现就接管、跳过 events，不会双重计数。
+- **DSH**（`~\.dsh\sessions\<project>\<session>\session.v4.jsonl.zstd`）：真实 token。追加式事件日志按多帧 zstd 存储，
+  Python 标准库解不了，`collect-dsh.py` 内嵌一段 Node 脚本按帧魔数逐帧解压（**依赖 `node` 在 PATH 上**；同时装了 node 与
+  Python 的环境里失败信息会出现在 `collectorErrors` 里）。用量在 `assistant/message` 事件的 `data.usage = {inputTokens, outputTokens, cacheReadTokens}`；
+  `inputTokens` 不含缓存命中（已逐条核对 7 轮会话），输入侧 = `inputTokens + cacheReadTokens`。事件时间 epoch 毫秒 UTC；
+  模型取该步之前最近的 `request/context`（或 `request/header`）事件，中途换模型的会话按步归属。失败的 `assistant/attempt` 全零、跳过。
+  旧版 `session.jsonl.zstd` 仅在会话没有 `.v4` 文件时才读，不会重复计数。
+- **按需隐藏**：`server.py` 顶部的 `HIDDEN_SOURCE_KEYS = {"ccs-opencode", "ccs-gemini"}` 把 OpenCode / Gemini 两个标签页从 payload 里
+  过滤掉（数据仍在采集，只是不显示，按模型视图也不会汇总它们）。想恢复某个标签页，删掉对应 key 即可。
 - **Trae 系（Trae / Trae CN / TRAE SOLO CN）：不支持**（2026-10-13 实测，三类存储全扫过）。
   - **会话与用量都在 SQLCipher 加密库**：`%APPDATA%\TRAE SOLO CN\ModularData\ai-agent\database.db`（61 MB，2026-10-10 还在写）、
     `ModularData\ckg_server\env_codekg.db`、`uno_packages.db`、`Local Storage\config.db`
@@ -124,7 +148,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File collect.ps1
 
 ### 采集器报错不再静默
 
-`collect-ccswitch.py` / `collect-sqlite.py` 抛异常时，`server.py` 以前只 `print` 到控制台并塞回空 `roots[]`，
+`collect-ccswitch.py` / `collect-sqlite.py` / `collect-atomcode.py` / `collect-dsh.py` 抛异常时，`server.py` 以前只 `print` 到控制台并塞回空 `roots[]`，
 表现就是**标签页莫名少几个**（真实事故：SQL 里选了不存在的 `request_model` 列，Codex/Gemini/OpenCode 三个标签页长期消失）。
 现在错误会随 `/api/usage` 的 `collectorErrors` 返回，并显示在看板右上角状态里。
 

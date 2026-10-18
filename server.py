@@ -24,7 +24,12 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 COLLECT_PS1 = os.path.join(BASE_DIR, "collect.ps1")
 CCSWITCH_PY = os.path.join(BASE_DIR, "collect-ccswitch.py")
 SQLITE_PY = os.path.join(BASE_DIR, "collect-sqlite.py")
+ATOMCODE_PY = os.path.join(BASE_DIR, "collect-atomcode.py")
+DSH_PY = os.path.join(BASE_DIR, "collect-dsh.py")
 CACHE_PATH = os.path.join(BASE_DIR, "cache.json")
+# Sources hidden from the dashboard by request (2026-10-18): still collected,
+# just dropped from the payload. Delete a key to bring its tab back.
+HIDDEN_SOURCE_KEYS = {"ccs-opencode", "ccs-gemini"}
 CACHE_TTL = 60  # seconds; incremental rescan is ~1s, so we can keep this short
 # The transcripts only record the selector key ("qfmodel"); the product name lives in the
 # CLI/IDE text bundle. Mapping it here keeps it display-only -- no rescan, no state bump.
@@ -32,6 +37,10 @@ MODEL_TEXTS = [
     os.path.join(os.path.expanduser("~"), ".qoder", ".auth", "dynamic-texts.json"),
     os.path.join(os.path.expanduser("~"), ".qoder-cn", ".auth", "dynamic-texts.json"),
 ]
+# Non-Qoder sources spell some models differently: AtomCode catalogs record GLM-5.3-Flash
+# as `glm5.3-flash` (no hyphen after glm), which would otherwise split off as a twin row of
+# the cc-switch/zcode/Qoder bucket. Same display-only mechanism as the bundle map.
+MODEL_ALIAS_FIXUPS = {"glm5.3-flash": "GLM-5.3-Flash"}
 
 _lock = threading.Lock()
 _cache = {"data": None, "ts": 0.0, "scanning": False}
@@ -63,9 +72,9 @@ def _run_collector(script, timeout=60):
 
 
 def _model_names():
-    """{selector alias: product name} from the text bundles, newest file winning on conflict
-    (they disagree: MiniMax-M3 vs M2.7 for mmodel). 'en' beats 'zh-CN' -- model names are
-    ASCII there, only the tiers differ."""
+    """{alias: product name} from the text bundles (plus MODEL_ALIAS_FIXUPS, applied last so
+    manual entries win), newest file winning on conflict (they disagree: MiniMax-M3 vs M2.7
+    for mmodel). 'en' beats 'zh-CN' -- model names are ASCII there, only the tiers differ."""
     names = {}
     def mt(p):
         try:
@@ -84,6 +93,7 @@ def _model_names():
                 if k.startswith("modelSelector.item.") and k.count(".") == 2 and isinstance(v, str):
                     per[k.rsplit(".", 1)[1]] = v
         names.update(per)
+    names.update(MODEL_ALIAS_FIXUPS)
     return names
 
 
@@ -101,7 +111,9 @@ def get_usage(force=False):
         data = _scan()                        # transcript-based (qoder + claude)
         ccs, ccs_err = _run_collector(CCSWITCH_PY)   # cc-switch rollups (real usage)
         sdb, sdb_err = _run_collector(SQLITE_PY)     # ZCode / Qoder desktop SQLite
-        errors = [e for e in (ccs_err, sdb_err) if e]
+        acs, acs_err = _run_collector(ATOMCODE_PY)   # AtomCode session metadata
+        dsh, dsh_err = _run_collector(DSH_PY)        # DSH zstd transcripts (via node)
+        errors = [e for e in (ccs_err, sdb_err, acs_err, dsh_err) if e]
         roots = list(data.get("roots") or [])
         # dedup: drop transcript days already covered by cc-switch claude rollups
         ccs_claude_days = set()
@@ -116,6 +128,9 @@ def get_usage(force=False):
                 r["requests"] = sum(d["requests"] for d in r["days"])
         roots += list(ccs.get("roots") or [])
         roots += list(sdb.get("roots") or [])
+        roots += list(acs.get("roots") or [])
+        roots += list(dsh.get("roots") or [])
+        roots = [r for r in roots if r.get("key") not in HIDDEN_SOURCE_KEYS]
         data["roots"] = roots
         data["modelNames"] = _model_names()
         data["collectorErrors"] = errors

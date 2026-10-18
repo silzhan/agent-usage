@@ -208,10 +208,15 @@ const COLOR_HEX = {
   intl:'#4f8ef7', cn:'#3ecf8e', cc:'#f7b84f',
   'ccs-claude':'#f28e3c', 'ccs-codex':'#b48ef7', 'ccs-gemini':'#5cc8e8', 'ccs-opencode':'#e85c8a',
   'codebuddy':'#d4e157', 'workbuddy':'#4ec9b0', 'cline':'#7986cb', 'cline-vsc':'#9fa8da', 'reasonix':'#a1887f',
-  'zcode':'#e5484d', 'qoder-ide':'#8fa1b3'
+  'zcode':'#e5484d', 'qoder-ide':'#8fa1b3', 'atomcode':'#c678dd', 'dsh':'#5cb85c',
+  'm:unknown':'#8a919c'   // the unattributed bucket reads as gray, not as one more model
 };
 const PALETTE = ['#4f8ef7','#3ecf8e','#f7b84f','#b48ef7','#e85c8a','#5cc8e8','#9fef4f','#ef9f4f'];
-const colorOf = (key, idx) => COLOR_HEX[key] || PALETTE[idx % PALETTE.length];
+// the model view no longer caps at 8 series, so extend past the hand palette with darker
+// golden-angle hues: the lightness drop keeps them distinct from the vivid eight even
+// when a generated hue lands near one of them
+const genColor = i => 'hsl(' + Math.round((i * 137.508) % 360) + ',55%,45%)';
+const colorOf = (key, idx) => COLOR_HEX[key] || (idx < PALETTE.length ? PALETTE[idx] : genColor(idx));
 
 // Must stay behaviourally identical to NormModel in collect.ps1 and norm_model() in
 // collect-ccswitch.py. Lowercasing first is what makes PS's case-insensitive -replace and
@@ -225,8 +230,6 @@ function normModel(s){
   t = t.replace(/[-_.]+$/, '');
   return (!t || t === '<synthetic>') ? 'unknown' : t;
 }
-// 其他 makes it exactly PALETTE.length segments, so no model shares a colour
-const MODEL_TOPN = PALETTE.length - 1;
 // Selector alias -> product name, supplied by server.py from ~/.qoder*/.auth/dynamic-texts.json.
 // Display-only: the aggregation key stays the alias, so swapping bundles needs no rescan.
 function modelName(alias){
@@ -280,6 +283,8 @@ function appOf(r){
   // SQLite roots carry Chinese/short labels, so key on the stable id instead of the label
   if (r.key === 'qoder-ide') return 'Qoder 桌面端';
   if (r.key === 'zcode') return 'ZCode';
+  if (r.key === 'atomcode') return 'AtomCode';
+  if (r.key === 'dsh') return 'DSH';
   if (/claude/i.test(l)) return 'Claude Code';
   if (/codex/i.test(l))  return 'Codex';
   if (/gemini/i.test(l)) return 'Gemini';
@@ -307,7 +312,7 @@ function buildModelRoots(src, rng){
       const alias = normModel(raw);
       // Bucket on the product name, not the alias: cc-switch records `glm-5.3-flash` while
       // the Qoder transcript records `gfmodel` for the same model, and keeping them apart
-      // splits one model across two rows (and two Top-7 slots).
+      // splits one model across two rows.
       const disp = modelName(alias);
       const model = normModel(disp);
       const a = acc[model] || (acc[model] = {req:0,in:0,out:0,cost:0,costSeen:false,days:{},reals:{},aliases:{},disp:''});
@@ -326,30 +331,12 @@ function buildModelRoots(src, rng){
     });
   }));
   const list = Object.keys(acc).map(k => ({model:k, a:acc[k]}));
-  // explicit key tie-break: rootsFiltered() runs several times per render and the table,
-  // legend and chart must agree on which model is the 7th
+  // explicit key tie-break: the order decides legend rows, chart stacking and the table
+  // columns, and rootsFiltered() re-runs on every render -- they must all agree even when
+  // two models tie on input tokens
   list.sort((x,y) => (y.a.in - x.a.in) || (x.model < y.model ? -1 : x.model > y.model ? 1 : 0));
-  const keep = list.slice(0, MODEL_TOPN), rest = list.slice(MODEL_TOPN);
-  if (rest.length) {
-    const m = {req:0,in:0,out:0,cost:0,costSeen:false,days:{},reals:{},aliases:{},disp:''};
-    rest.forEach(x => {
-      const a = x.a;
-      m.req += a.req; m.in += a.in; m.out += a.out; m.cost += a.cost;
-      if (a.costSeen) m.costSeen = true;
-      if (a.reals.real) m.reals.real = true;
-      if (a.reals.est)  m.reals.est = true;
-      Object.keys(a.aliases || {}).forEach(k => m.aliases[k] = true);
-      Object.keys(a.days).forEach(day => {
-        const t = m.days[day] || (m.days[day] = {req:0,in:0,out:0,cost:0,costSeen:false});
-        const s = a.days[day];
-        t.req += s.req; t.in += s.in; t.out += s.out;
-        if (s.costSeen) { t.cost += s.cost; t.costSeen = true; }
-      });
-    });
-    keep.push({model:'其他', a:m});
-  }
   const r2 = v => Math.round(v*100)/100;
-  return keep.map(x => ({
+  return list.map(x => ({
     key: 'm:' + x.model, label: x.a.disp || x.model,
     alias: Object.keys(x.a.aliases || {}).sort().join(' '),
     kind: x.a.reals.real && x.a.reals.est ? '混合' : (x.a.reals.real ? '真实值' : '估算'),
@@ -366,8 +353,8 @@ function buildModelRoots(src, rng){
 }
 
 // Memoised on purpose: render() -> buckets() -> dayMap() -> rootsFiltered() is called at
-// least three times per paint, and an un-memoised top-N can pick a different 7th model on
-// each pass when two models tie, making the chart contradict the table.
+// least three times per paint, and an un-memoised re-sort can order two tied models
+// differently on each pass, making the chart contradict the table.
 let _vrKey = '', _vr = null;
 function rootsFiltered(){
   const rs = roots();
@@ -547,7 +534,7 @@ function render(){
     '按模型：模型名取自各转录的 model 字段，已去掉 provider 前缀与日期后缀（deepseek-v4-flash-0731 → deepseek-v4-flash）。',
     'Qoder 内置模型在转录里只记选择器别名，产品名由 ~/.qoder*/.auth/dynamic-texts.json 映射（qfmodel → Qwen3.8-Flash），别名以浅色标在旁边。',
     'efficient / lite / ultimate / auto 是档位不是某个模型，还原不出具体型号。',
-    '缺失或 <synthetic> 归入 unknown；柱图只列输入 token 前 ' + MODEL_TOPN + ' 名，其余并入「其他」。',
+    '缺失或 <synthetic> 归入 unknown（固定灰色）；所有模型逐一列出（按输入 token 降序），不再合并成「其他」。',
     '成本仅 cc-switch 覆盖的模型有真实 USD，其它来源不估价。',
   );
   document.getElementById('footnote').innerHTML =
