@@ -524,7 +524,8 @@ function render(){
   const fnItems = [
     '日期一律按 UTC 日切分（北京时间比 UTC 早 8 小时，跨天会落到前一日）。',
     'Qoder CLI 本地 usage 为 0，其数据为字符估算：每个请求按重发全部前文上下文计，单请求按窗口封顶'
-      + '（内置 200K / BYOK ' + (DATA.customWindowK || 300) + 'K，≈0.32 token/字符）。',
+      + '（内置 200K / BYOK ' + (DATA.customWindowK || 300) + 'K，≈' + (DATA.conv || 0.32) + ' token/字符），'
+      + '且只累计转录里 ≥30 字符的行。',
     'Claude Code：转录含真实 usage，输入侧 = input_tokens + cache_creation + cache_read。',
     'CodeBuddy / WorkBuddy：转录含真实 usage，inputTokens 已含缓存命中，不再叠加。',
     'Cline（CLI / VSCode 插件）：metrics 含真实 usage（inputTokens / tokens.prompt 取其一）。',

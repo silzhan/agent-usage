@@ -33,7 +33,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File collect.ps1
 
 - 每个 assistant 请求按"重发全部前文上下文"计（与真实计费口径一致）；单请求上下文按窗口封顶：
   内置模型 200K token → `$CAP` = 200000/0.32 ≈ 62.5 万字符，BYOK（`qoder-custom-*`）默认 300K → ≈ 93.75 万字符（`-CustomWindowK` 可调）
+- 上下文字符只累计转录里 **长度 ≥30 的行**（`collect.ps1:138` 的 `if ($line.Length -lt 30) { continue }`）：
+  一行就是一条 JSONL 记录，短到不足 30 字符的不是消息内容，不进 `$ctx`
 - 字符 → token 系数 0.32（中英混合代码场景约 3 字符/token），可在 `collect.ps1` 顶部调整 `$conv` / `$CAP`
+  - 系数是实测的，不是猜的（2026-10 复核）：全量 5.66 亿字符里 ASCII 字母 60% / 符号 19% / 数字 11% / 中文仅 2.7%，
+    按字符类各自的 BPE 效率加权得 0.323；再用 Claude Code 的真实 usage 交叉校准，长文本输出实测 ≈0.316 token/字符
 - 日期按 UTC 日切分（北京时间会晚 8 小时跨天）
 - 结果为估算：量级与分布可信，精确值以 Qoder 服务端为准
 
