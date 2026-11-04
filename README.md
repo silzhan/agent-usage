@@ -3,8 +3,8 @@
 多 AI 编程助手（Qoder CLI 国际/国内、Qoder 桌面端、Claude Code、CodeBuddy、WorkBuddy、Cline CLI/插件、Reasonix、Codex、ZCode、AtomCode、DSH）的本地 token 用量统计与可视化。
 OpenCode 与 Gemini 仍在采集，但按需在看板上隐藏（见下方 `HIDDEN_SOURCE_KEYS`）。
 
-Qoder CLI 本地记录的 usage 字段全为 0，本工具通过扫描会话转录里的字符量来**估算** token 消耗，
-覆盖两个 CLI 目录：
+Qoder CLI 较新的转录（2026-11 起）会写入真实 `usage`（`input_tokens` 已含缓存），本工具按 `message.id` 去重后直接采用；
+老转录的 usage 全为 0，则退回扫描会话转录里的字符量来**估算** token 消耗。覆盖两个 CLI 目录：
 
 - 国际版：`~\.qoder\projects`（qoder.sh）
 - 国内版：`~\.qoder-cn\projects`（qoder.com.cn）
@@ -31,9 +31,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File collect.ps1
 
 ## 估算口径
 
+- **有真实 usage 就用真值**：一次响应会被拆成多条 assistant 行（thinking / text / tool_use，共用 `message.id`），
+  先按 `message.id` 去重再计一次请求；`input_tokens` 已包含 `cache_read_input_tokens`，不再重复相加
+  （2026-11-02 与本机 CPA 网关面板逐项核对一致）。usage 全为 0 的老转录才走下面的字符估算。
 - 每个 assistant 请求按"重发全部前文上下文"计（与真实计费口径一致）；单请求上下文按窗口封顶：
   内置模型 200K token → `$CAP` = 200000/0.32 ≈ 62.5 万字符，BYOK（`qoder-custom-*`）默认 300K → ≈ 93.75 万字符（`-CustomWindowK` 可调）
-- 上下文字符只累计转录里 **长度 ≥30 的行**（`collect.ps1:138` 的 `if ($line.Length -lt 30) { continue }`）：
+- 上下文字符只累计转录里 **长度 ≥30 的行**（`collect.ps1` 的 `if ($line.Length -lt 30) { continue }`）：
   一行就是一条 JSONL 记录，短到不足 30 字符的不是消息内容，不进 `$ctx`
 - 字符 → token 系数 0.32（中英混合代码场景约 3 字符/token），可在 `collect.ps1` 顶部调整 `$conv` / `$CAP`
   - 系数是实测的，不是猜的（2026-10 复核）：全量 5.66 亿字符里 ASCII 字母 60% / 符号 19% / 数字 11% / 中文仅 2.7%，
@@ -57,7 +60,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File collect.ps1
   排序带模型名 tie-break，保证图例、图表、表格里的顺序一致。
 - **成本只来自 cc-switch**：其它来源没有可靠单价，一律不估价。所以 `真实值` ≠ 一定有 `$`——本地转录有真实 token 但无金额，
   只有 cc-switch 覆盖的模型才带 `total_cost_usd`。cc-switch 的聚合止于清理前最后一天，若日期区间没覆盖到它，模型视图不会出现任何 `$`。
-- 采集状态文件升到 `version 7`，首次运行会全量重扫一次（约 25 秒 / 640 个文件），之后是约 1 秒的增量扫描。
+- 采集状态文件升到 `version 9`，首次运行会全量重扫一次（约 25 秒 / 640 个文件），之后是约 1 秒的增量扫描。
 
 ### Qoder 模型别名 → 产品名
 
@@ -103,7 +106,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File collect.ps1
 
 ## 数据源说明
 
-- **Qoder CLI**（`.qoder` / `.qoder-cn`）：本地 usage 字段全为 0，字符估算（≈0.32 token/字符；内置模型 200K / BYOK `qoder-custom-*` 300K 窗口封顶）
+- **Qoder CLI**（`.qoder` / `.qoder-cn`）：优先用转录里的真实 usage（按 `message.id` 去重，`input_tokens` 已含缓存）；
+  老记录 usage 为 0 时退回字符估算（≈0.32 token/字符；内置模型 200K / BYOK `qoder-custom-*` 300K 窗口封顶）
 - **Claude Code 本地转录**（`.claude`）：真实 usage token；但 Claude Code 默认自动清理 30 天前的会话，历史会丢
 - **CodeBuddy 本地转录**（`.codebuddy`）：真实 usage（`providerData.usage.inputTokens/outputTokens`，毫秒时间戳）
 - **WorkBuddy 本地转录**（`.workbuddy`）：与 CodeBuddy 同一套记录结构，走 `collect.ps1` 里同一个分支。

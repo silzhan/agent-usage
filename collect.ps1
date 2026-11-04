@@ -13,7 +13,7 @@ $conv = 0.32      # chars -> tokens (mixed cn/en/code)
 $CAP  = [long](200000 / $conv)             # qoder built-in models: 200K token window -> ~625K chars
 $CAPC = [long]($CustomWindowK * 1000 / $conv)  # BYOK (qoder-custom-*) models: default 300K tokens
 $MaxCap = [Math]::Max($CAP, $CAPC)
-$StateVersion = 7   # bump when estimation logic changes (invalidates old cache)
+$StateVersion = 9   # bump when estimation logic changes (invalidates old cache)
 $StatePath = Join-Path $PSScriptRoot 'files-state.json'
 
 # Must stay behaviourally identical to normModel() in index.html and norm_model() in
@@ -32,11 +32,15 @@ function NormModel([string]$s) {
 # Accumulate into a per-model bucket. Never assign a cached hashtable by reference here:
 # $acc[$k] = $cached[$k] aliases it, and aggregation runs before the state file is saved,
 # so the all-files sum would be written back into per-file state and inflate every later run.
-function Add-Model([hashtable]$m, [string]$model, [int]$req, [long]$inC, [long]$outC) {
-  if ($null -eq $m[$model]) { $m[$model] = @{ req = 0; inC = [long]0; outC = [long]0 } }
+# inT/outT are REAL tokens (new Qoder transcripts carry usage); inC/outC are estimated chars.
+# Both can coexist in one model bucket: older calls fall back to the character estimate.
+function Add-Model([hashtable]$m, [string]$model, [int]$req, [long]$inC, [long]$outC, [long]$inT = 0, [long]$outT = 0) {
+  if ($null -eq $m[$model]) { $m[$model] = @{ req = 0; inC = [long]0; outC = [long]0; inT = [long]0; outT = [long]0 } }
   $m[$model].req  += $req
   $m[$model].inC  += $inC
   $m[$model].outC += $outC
+  $m[$model].inT  += $inT
+  $m[$model].outT += $outT
 }
 
 $roots = @(
@@ -71,10 +75,10 @@ if (-not $Full -and (Test-Path $StatePath)) {
           $mm = @{}
           if ($null -ne $d.Value.m) {
             foreach ($mp in $d.Value.m.PSObject.Properties) {
-              $mm[$mp.Name] = @{ req = [int]$mp.Value.req; inC = [long]$mp.Value.inC; outC = [long]$mp.Value.outC }
+              $mm[$mp.Name] = @{ req = [int]$mp.Value.req; inC = [long]$mp.Value.inC; outC = [long]$mp.Value.outC; inT = [long]$mp.Value.inT; outT = [long]$mp.Value.outT }
             }
           }
-          $days[$d.Name] = @{ req = [int]$d.Value.requests; inC = [long]$d.Value.inC; outC = [long]$d.Value.outC; m = $mm }
+          $days[$d.Name] = @{ req = [int]$d.Value.requests; inC = [long]$d.Value.inC; outC = [long]$d.Value.outC; inT = [long]$d.Value.inT; outT = [long]$d.Value.outT; m = $mm }
         }
         $state[$p.Name] = @{ mtime = $e.mtime; size = [long]$e.size; root = $e.root; days = $days }
       }
@@ -99,6 +103,8 @@ foreach ($r in $roots) {
     # ---- parse one transcript ----
     $ctx = [long]0
     $days = @{}
+    $qagg = @{}
+    $ln = 0
     # Cline (CLI + VSCode): whole-file JSON array; CLI uses metrics.{inputTokens,outputTokens},
     # VSCode extension uses metrics.tokens.{prompt,completion}; both carry epoch-ms ts
     if ($r.key -eq 'cline' -or $r.key -eq 'cline-vsc') {
@@ -123,7 +129,7 @@ foreach ($r in $roots) {
           if ($e.ts) {
             try { $d = [DateTimeOffset]::FromUnixTimeMilliseconds([long]$e.ts).UtcDateTime.ToString('yyyy-MM-dd') } catch {}
           }
-          if (-not $days[$d]) { $days[$d] = @{ req = 0; inC = [long]0; outC = [long]0; m = @{} } }
+          if (-not $days[$d]) { $days[$d] = @{ req = 0; inC = [long]0; outC = [long]0; inT = [long]0; outT = [long]0; m = @{} } }
           $days[$d].req++
           $days[$d].inC += $inT
           $days[$d].outC += $outT
@@ -135,6 +141,7 @@ foreach ($r in $roots) {
       continue
     }
     foreach ($line in [System.IO.File]::ReadLines($f.FullName)) {
+      $ln++
       if ($line.Length -lt 30) { continue }
       # Reasonix: per-request JSON lines, prompt/completion, ISO timestamp with tz
       if ($r.key -eq 'reasonix') {
@@ -144,7 +151,7 @@ foreach ($r in $roots) {
         if ($o.ts) {
           try { $d = ([DateTimeOffset]::Parse([string]$o.ts, [Globalization.CultureInfo]::InvariantCulture)).UtcDateTime.ToString('yyyy-MM-dd') } catch {}
         }
-        if (-not $days[$d]) { $days[$d] = @{ req = 0; inC = [long]0; outC = [long]0; m = @{} } }
+        if (-not $days[$d]) { $days[$d] = @{ req = 0; inC = [long]0; outC = [long]0; inT = [long]0; outT = [long]0; m = @{} } }
         $rq = 1
         if ($o.requests) { $rq = [int]$o.requests }
         $rp = [long]$o.prompt
@@ -173,7 +180,7 @@ foreach ($r in $roots) {
           # [^}]* can't cross the '}' embedded in providerData.reasoning; anchor on the next key
           $rawM = ''
           if ($line -match '"model":"([^"]+)","requestModelId"') { $rawM = $matches[1] }
-          if (-not $days[$d]) { $days[$d] = @{ req = 0; inC = [long]0; outC = [long]0; m = @{} } }
+          if (-not $days[$d]) { $days[$d] = @{ req = 0; inC = [long]0; outC = [long]0; inT = [long]0; outT = [long]0; m = @{} } }
           $days[$d].req++
           $days[$d].inC += $inT
           $days[$d].outC += $outT
@@ -188,7 +195,7 @@ foreach ($r in $roots) {
         $rawM = ''
         if ($line -match '"model":"([^"]+)"') { $rawM = $matches[1] }
         $model = NormModel $rawM
-        if (-not $days[$d]) { $days[$d] = @{ req = 0; inC = [long]0; outC = [long]0; m = @{} } }
+        if (-not $days[$d]) { $days[$d] = @{ req = 0; inC = [long]0; outC = [long]0; inT = [long]0; outT = [long]0; m = @{} } }
         if ($r.real) {
           # Claude Code: sum REAL usage tokens (input + cache read/creation as input side)
           if ($line -match '"usage":\{[^}]*"input_tokens":(\d+)[^}]*"cache_creation_input_tokens":(\d+)[^}]*"cache_read_input_tokens":(\d+)[^}]*"output_tokens":(\d+)') {
@@ -201,21 +208,63 @@ foreach ($r in $roots) {
           }
           continue
         }
-        # Qoder (estimated): per-model window, BYOK custom -> 300K, built-ins -> 200K
-        $cap = $CAP
-        if ($rawM -match '^qoder-custom-') { $cap = $CAPC }
-        $inEst = [Math]::Min($ctx, $cap)
-        $days[$d].req++
-        $days[$d].inC += $inEst
+        # Qoder: newer transcripts carry REAL usage on the line that ends the message (thinking /
+        # text / tool_use are split into several lines sharing message.id, so fold by id first --
+        # otherwise the request count inflates ~2.5x). input_tokens already includes cache_read
+        # (verified against the CPA panel 2026-11-02), so do NOT add cache on top.
+        # Older transcripts write all-zero usage -> keep the character estimate per line.
+        # $lineCap, not $cap: PowerShell variable names are case-insensitive, so `$cap = $CAP`
+        # followed by `$cap = $CAPC` would permanently overwrite $CAP for every later file.
+        $lineCap = $CAP
+        if ($rawM -match '^qoder-custom-') { $lineCap = $CAPC }
+        $inEst = [Math]::Min($ctx, $lineCap)
         $outL = [long]0
         foreach ($tx in [regex]::Matches($line, '"text":"((?:[^"\\]|\\.)*)"')) { $outL += $tx.Groups[1].Value.Length }
-        $outEst = [Math]::Min($outL, $cap)
-        $days[$d].outC += $outEst
-        Add-Model $days[$d].m $model 1 $inEst $outEst
+        $outEst = [Math]::Min($outL, $lineCap)
+        $midM = [regex]::Match($line, '"message":\{"id":"([^"]+)"')
+        $lineKey = if ($midM.Success) { $midM.Groups[1].Value } else { "line:$ln" }
+        if (-not $qagg.ContainsKey($lineKey)) {
+          $qagg[$lineKey] = @{ day = $d; model = $model; lines = 0; inEst = [long]0; outEst = [long]0; inT = [long]0; outT = [long]0 }
+        }
+        $qa = $qagg[$lineKey]
+        $qa.lines++
+        $qa.inEst += $inEst
+        $qa.outEst += $outEst
+        # Last top-level usage object wins: content precedes usage, and quotes inside tool strings
+        # are backslash-escaped so they cannot match these key patterns.
+        $us = $line.LastIndexOf('"usage":{')
+        if ($us -ge 0) {
+          $ue = $line.IndexOf('"server_tool_use"', $us)
+          if ($ue -lt 0) { $ue = [Math]::Min($line.Length, $us + 600) }
+          $u = $line.Substring($us, $ue - $us)
+          $mi = [regex]::Match($u, '"input_tokens":(\d+)')
+          $mo = [regex]::Match($u, '"output_tokens":(\d+)')
+          $ri = if ($mi.Success) { [long]$mi.Groups[1].Value } else { [long]0 }
+          $ro = if ($mo.Success) { [long]$mo.Groups[1].Value } else { [long]0 }
+          if ($ri + $ro -gt 0) {   # all-zero usage = old transcript, stay on the estimate
+            if ($ri -gt $qa.inT) { $qa.inT = $ri }
+            if ($ro -gt $qa.outT) { $qa.outT = $ro }
+          }
+        }
       }
       if (-not $r.real) {
         $ctx += $line.Length
         if ($ctx -gt $MaxCap) { $ctx = $MaxCap }
+      }
+    }
+    # fold per-message Qoder aggregates: real usage wins, otherwise keep the per-line estimates
+    foreach ($qa in $qagg.Values) {
+      if (-not $days[$qa.day]) { $days[$qa.day] = @{ req = 0; inC = [long]0; outC = [long]0; inT = [long]0; outT = [long]0; m = @{} } }
+      if ($qa.inT + $qa.outT -gt 0) {
+        $days[$qa.day].req++
+        $days[$qa.day].inT += $qa.inT
+        $days[$qa.day].outT += $qa.outT
+        Add-Model $days[$qa.day].m $qa.model 1 0 0 $qa.inT $qa.outT
+      } else {
+        $days[$qa.day].req += $qa.lines
+        $days[$qa.day].inC += $qa.inEst
+        $days[$qa.day].outC += $qa.outEst
+        Add-Model $days[$qa.day].m $qa.model $qa.lines $qa.inEst $qa.outEst
       }
     }
     $state[$f.FullName] = @{ mtime = $mtime; size = $f.Length; root = $r.key; days = $days }
@@ -235,17 +284,19 @@ foreach ($r in $roots) {
     $sess++
     foreach ($k in $e.days.Keys) {
       $v = $e.days[$k]
-      if (-not $day[$k]) { $day[$k] = @{ req = 0; inC = [long]0; outC = [long]0; m = @{} } }
-      $day[$k].req += $v.req; $day[$k].inC += $v.inC; $day[$k].outC += $v.outC
+      if (-not $day[$k]) { $day[$k] = @{ req = 0; inC = [long]0; outC = [long]0; inT = [long]0; outT = [long]0; m = @{} } }
+      $day[$k].req += $v.req; $day[$k].inC += $v.inC; $day[$k].outC += $v.outC; $day[$k].inT += $v.inT; $day[$k].outT += $v.outT
       if ($null -ne $v.m) {
         foreach ($mk in $v.m.Keys) {
           $mv = $v.m[$mk]
           # copy-in, never `$day[$k].m[$mk] = $mv` -- that aliases per-file state and the
           # sum would then be persisted back, permanently inflating later incremental runs
-          if ($null -eq $day[$k].m[$mk]) { $day[$k].m[$mk] = @{ req = 0; inC = [long]0; outC = [long]0 } }
+          if ($null -eq $day[$k].m[$mk]) { $day[$k].m[$mk] = @{ req = 0; inC = [long]0; outC = [long]0; inT = [long]0; outT = [long]0 } }
           $day[$k].m[$mk].req  += $mv.req
           $day[$k].m[$mk].inC  += $mv.inC
           $day[$k].m[$mk].outC += $mv.outC
+          $day[$k].m[$mk].inT  += $mv.inT
+          $day[$k].m[$mk].outT += $mv.outT
         }
       }
     }
@@ -259,23 +310,32 @@ foreach ($r in $roots) {
       $mv = $v.m[$mk]
       $bm[$mk] = [pscustomobject]@{
         requests = $mv.req
-        inTokens  = [long][Math]::Round($mv.inC * $mult)
-        outTokens = [long][Math]::Round($mv.outC * $mult)
+        inTokens  = [long][Math]::Round($mv.inC * $mult + $mv.inT)
+        outTokens = [long][Math]::Round($mv.outC * $mult + $mv.outT)
       }
     }
+    $dayIn  = [long][Math]::Round($v.inC * $mult + $v.inT)
+    $dayOut = [long][Math]::Round($v.outC * $mult + $v.outT)
+    # page labels: real vs estimated share of this day (Qoder can mix both)
+    [long]$dayReal = if ($r.real) { $dayIn + $dayOut } else { $v.inT + $v.outT }
+    [long]$dayEst  = if ($r.real) { 0 } else { [Math]::Round(($v.inC + $v.outC) * $conv) }
     $days += [pscustomobject]@{
       day = $k; requests = $v.req
-      inTokens  = [long][Math]::Round($v.inC * $mult)
-      outTokens = [long][Math]::Round($v.outC * $mult)
+      inTokens  = $dayIn
+      outTokens = $dayOut
+      realTokens = $dayReal; estTokens = $dayEst
       byModel = $bm
     }
   }
   [long]$inSum  = ($days | Measure-Object -Property inTokens -Sum).Sum
   [long]$outSum = ($days | Measure-Object -Property outTokens -Sum).Sum
+  [long]$realSum = ($days | Measure-Object -Property realTokens -Sum).Sum
+  [long]$estSum  = ($days | Measure-Object -Property estTokens -Sum).Sum
   $reqSum = ($days | Measure-Object -Property requests -Sum).Sum
   $outRoots += [pscustomobject]@{
     key = $r.key; label = $r.label; sessions = $sess; real = [bool]$r.real
-    requests = [int]$reqSum; inTokens = $inSum; outTokens = $outSum; days = $days
+    requests = [int]$reqSum; inTokens = $inSum; outTokens = $outSum
+    realTokens = $realSum; estTokens = $estSum; days = $days
   }
 }
 
@@ -290,10 +350,10 @@ foreach ($k in ($state.Keys | Sort-Object)) {
     if ($null -ne $dv.m) {
       foreach ($mk in ($dv.m.Keys | Sort-Object)) {
         $mv = $dv.m[$mk]
-        $mm[$mk] = [ordered]@{ req = $mv.req; inC = $mv.inC; outC = $mv.outC }
+        $mm[$mk] = [ordered]@{ req = $mv.req; inC = $mv.inC; outC = $mv.outC; inT = $mv.inT; outT = $mv.outT }
       }
     }
-    $dobj[$dk] = [ordered]@{ requests = $dv.req; inC = $dv.inC; outC = $dv.outC; m = $mm }
+    $dobj[$dk] = [ordered]@{ requests = $dv.req; inC = $dv.inC; outC = $dv.outC; inT = $dv.inT; outT = $dv.outT; m = $mm }
   }
   $save[$k] = [ordered]@{ mtime = $e.mtime; size = $e.size; root = $e.root; days = $dobj }
 }
@@ -313,6 +373,6 @@ $saveObj = [ordered]@{ version = $StateVersion; files = [pscustomobject]$save }
   incremental = -not $Full
   reusedFiles = $reused
   reparsedFiles = $reparsed
-  note        = 'qoder values are character-based estimates (built-in 200K / BYOK customWindowK windows); claude code values are REAL usage tokens from transcripts; byModel keys are normalized (provider prefix and date suffix stripped), cost only comes from cc-switch'
+  note        = 'qoder uses real per-call usage when transcripts carry it (input_tokens already includes cache), otherwise character-based estimates; claude code values are REAL usage tokens from transcripts; byModel keys are normalized (provider prefix and date suffix stripped), cost only comes from cc-switch'
   roots       = $outRoots
 } | ConvertTo-Json -Depth 10 -Compress

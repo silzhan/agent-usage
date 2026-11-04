@@ -327,7 +327,9 @@ function buildModelRoots(src, rng){
         t.cost += v.costUsd; t.costSeen = true;
         a.cost += v.costUsd; a.costSeen = true;
       }
-      a.reals[r.real === true ? 'real' : 'est'] = true;
+      // a Qoder day can mix real usage and character estimates, so label both
+      if (r.real === true || (d.realTokens || 0) > 0) a.reals.real = true;
+      if (r.real !== true && (d.estTokens || 0) > 0) a.reals.est = true;
     });
   }));
   const list = Object.keys(acc).map(k => ({model:k, a:acc[k]}));
@@ -451,7 +453,12 @@ function render(){
   document.getElementById('rangeLabel').textContent =
     fmtLbl(rng[0]) + ' 00:00:00 - ' + fmtLbl(rng[1]) + ' 23:59:59';
 
-  const kindTag = r => r.kind || (r.real ? '真实值' : '估算');
+  const kindTag = r => {
+    if (r.kind) return r.kind;   // model view already merged real/estimated days
+    if (r.real === true) return '真实值';
+    if ((r.realTokens || 0) > 0) return (r.estTokens || 0) > 0 ? '混合' : '真实值';
+    return '估算';
+  };
   if (DIM === 'model' && !rs.length) {
     // Two different empties: the cache predates byModel (a rescan fixes it), versus the
     // range/tab simply having no model-tagged rows (a rescan would fix nothing).
@@ -523,7 +530,8 @@ function render(){
 
   const fnItems = [
     '日期一律按 UTC 日切分（北京时间比 UTC 早 8 小时，跨天会落到前一日）。',
-    'Qoder CLI 本地 usage 为 0，其数据为字符估算：每个请求按重发全部前文上下文计，单请求按窗口封顶'
+    'Qoder CLI：新转录含真实 usage，按 message.id 去重后直接采用（input_tokens 已含缓存）；'
+      + 'usage 为 0 的老转录才按字符估算——每个请求按重发全部前文上下文计，单请求按窗口封顶'
       + '（内置 200K / BYOK ' + (DATA.customWindowK || 300) + 'K，≈' + (DATA.conv || 0.32) + ' token/字符），'
       + '且只累计转录里 ≥30 字符的行。',
     'Claude Code：转录含真实 usage，输入侧 = input_tokens + cache_creation + cache_read。',
@@ -545,7 +553,7 @@ function render(){
     '按模型：模型名已去掉 provider 前缀与日期后缀（deepseek-v4-flash-0731 → deepseek-v4-flash），再按产品名合并同一模型。',
     'Qoder 内置模型在转录里只记选择器别名，产品名由 ~/.qoder*/.auth/dynamic-texts.json 映射（qfmodel → Qwen3.8-Flash）；'
       + 'AtomCode 的 glm5.3-flash 也并入 GLM-5.3-Flash；所有别名以浅色标在旁边。',
-    '按模型的合计由各来源每天的 byModel 逐项相加；估算来源按模型分别取整，与「按来源」合计可能相差几个 token。',
+    '按模型的合计由各来源每天的 byModel 逐项相加；字符估算的部分按模型分别取整，与「按来源」合计可能相差几个 token。',
     'efficient / lite / ultimate / auto 是档位不是某个模型，还原不出具体型号。',
     '缺失或 <synthetic> 归入 unknown（固定灰色）；所有模型逐一列出（按输入 token 降序），不再合并成「其他」。',
     '成本仅 cc-switch 覆盖的模型有真实 USD，其它来源不估价。',
