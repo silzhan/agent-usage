@@ -60,7 +60,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File collect.ps1
   排序带模型名 tie-break，保证图例、图表、表格里的顺序一致。
 - **成本只来自 cc-switch**：其它来源没有可靠单价，一律不估价。所以 `真实值` ≠ 一定有 `$`——本地转录有真实 token 但无金额，
   只有 cc-switch 覆盖的模型才带 `total_cost_usd`。cc-switch 的聚合止于清理前最后一天，若日期区间没覆盖到它，模型视图不会出现任何 `$`。
-- 采集状态文件升到 `version 9`，首次运行会全量重扫一次（约 25 秒 / 640 个文件），之后是约 1 秒的增量扫描。
+- 采集状态文件升到 `version 10`，首次运行会全量重扫一次（约 25 秒 / 640 个文件），之后是约 1 秒的增量扫描。
 
 ### Qoder 模型别名 → 产品名
 
@@ -84,8 +84,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File collect.ps1
   `glm5.3-flash`（glm 后少一个连字符），映射到同一产品名后与 cc-switch / ZCode / Qoder 的记录合并成一行。
   再遇到同类跨来源拼写差异，往这个 dict 加一条即可——同样是展示层生效、无需重扫。
 - ⚠️ **档位不是模型**：`efficient` / `lite` / `ultimate` / `auto` / `performance` / `fast` 是"经济/轻量/极致/自动"档位，
-  服务端每次可能路由到不同底座，还原不出具体型号。`efficient` 恰是最大头（38,277 次、6.02B 输入），
-  这部分永远只能是档位名。
+  服务端每次可能路由到不同底座，`efficient` / `lite` / `ultimate` 永远只能是档位名。
+- **`auto` 在 Qoder CLI 1.1.84 起可以还原**：这类转录的 assistant 行仍写 `"model":"auto"`，但每轮人类提示上带
+  `businessModelKey`（自动路由选中的 qfmodel / dfmodel 等）。`collect.ps1` 现在按该字段归属，所以 2026-11-06/07 的
+  658 条 auto 请求分别落到 Qwen3.8-Flash（398 条）和 DeepSeek-Flash（260 条）；只有更早真正选 "Auto" 档位的 5 条
+  （2026-07，1,856 输入 token）仍显示为 Auto。`auto` → `Auto` 的展示映射保留，用于这 5 条。
 - ⚠️ 这是**产品对外名称**，不等于 provider 上游型号；`modelSelector.item.<别名>.description` 里偶尔带日期，比标题更准
   （`dmodel` → 描述写 DeepSeek-V4-Pro-0813，`qmodel_38max` → Qwen3.8-Max-0902）。
 

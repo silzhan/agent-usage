@@ -13,7 +13,7 @@ $conv = 0.32      # chars -> tokens (mixed cn/en/code)
 $CAP  = [long](200000 / $conv)             # qoder built-in models: 200K token window -> ~625K chars
 $CAPC = [long]($CustomWindowK * 1000 / $conv)  # BYOK (qoder-custom-*) models: default 300K tokens
 $MaxCap = [Math]::Max($CAP, $CAPC)
-$StateVersion = 9   # bump when estimation logic changes (invalidates old cache)
+$StateVersion = 10  # bump when estimation logic changes (invalidates old cache)
 $StatePath = Join-Path $PSScriptRoot 'files-state.json'
 
 # Must stay behaviourally identical to normModel() in index.html and norm_model() in
@@ -104,6 +104,7 @@ foreach ($r in $roots) {
     $ctx = [long]0
     $days = @{}
     $qagg = @{}
+    $curModel = ''
     $ln = 0
     # Cline (CLI + VSCode): whole-file JSON array; CLI uses metrics.{inputTokens,outputTokens},
     # VSCode extension uses metrics.tokens.{prompt,completion}; both carry epoch-ms ts
@@ -143,6 +144,15 @@ foreach ($r in $roots) {
     foreach ($line in [System.IO.File]::ReadLines($f.FullName)) {
       $ln++
       if ($line.Length -lt 30) { continue }
+      # Qoder CLI 1.1.84: an auto-routed turn still writes "model":"auto" on every
+      # assistant line, but the human prompt records the model auto picked in its
+      # businessModelKey. Track it so those tokens land on qfmodel/dfmodel, not Auto.
+      if ($r.key -eq 'intl' -or $r.key -eq 'cn') {
+        if ($line -like '*"businessModelKey":"*') {
+          $bm = [regex]::Match($line, '"businessModelKey":"([^"]+)"')
+          if ($bm.Success) { $curModel = $bm.Groups[1].Value }
+        }
+      }
       # Reasonix: per-request JSON lines, prompt/completion, ISO timestamp with tz
       if ($r.key -eq 'reasonix') {
         try { $o = $line | ConvertFrom-Json } catch { continue }
@@ -194,6 +204,7 @@ foreach ($r in $roots) {
         # "model":" occurs exactly once per assistant line in qoder + claude transcripts
         $rawM = ''
         if ($line -match '"model":"([^"]+)"') { $rawM = $matches[1] }
+        if ($rawM -eq 'auto' -and $curModel) { $rawM = $curModel }
         $model = NormModel $rawM
         if (-not $days[$d]) { $days[$d] = @{ req = 0; inC = [long]0; outC = [long]0; inT = [long]0; outT = [long]0; m = @{} } }
         if ($r.real) {

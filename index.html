@@ -60,6 +60,7 @@
   section { background:var(--panel); border:1px solid var(--border); border-radius:12px;
             padding:18px; margin-bottom:20px; }
   section h2 { margin:0 0 12px; font-size:15px; display:flex; justify-content:space-between; align-items:baseline; }
+  section h2.subchart { margin:16px 0 8px; }
   .legend { display:flex; gap:16px; color:var(--muted); font-size:12px; margin-bottom:8px; flex-wrap:wrap; }
   .dot { display:inline-block; width:10px; height:10px; border-radius:3px; margin-right:5px; vertical-align:-1px; }
   .tag { font-size:10px; border:1px solid var(--border); border-radius:4px; padding:0 4px; margin-left:4px; }
@@ -73,7 +74,7 @@
   svg .hit  { fill:transparent; cursor:crosshair; }
   svg .hit.on { fill:var(--hover); }
   section, .card { transition:background-color .18s ease, border-color .18s ease; }
-  .tip { position:fixed; z-index:60; pointer-events:none; min-width:210px; max-width:320px;
+  .tip { position:fixed; z-index:60; pointer-events:none; min-width:210px; max-width:390px;
          background:var(--tipbg); border:1px solid var(--accent2); border-radius:11px;
          padding:9px 11px; font-size:12px; box-shadow:0 10px 30px var(--shadow); }
   .tip[hidden] { display:none; }
@@ -82,6 +83,9 @@
   .tip .r { display:flex; align-items:center; gap:6px; line-height:1.75; }
   .tip .r .n { flex:1; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .tip .r .q { font-weight:600; font-variant-numeric:tabular-nums; }
+  .tip .r .rq { font-weight:600; font-variant-numeric:tabular-nums; min-width:48px; text-align:right; }
+  .tip .r.head { color:var(--dim); font-size:10px; line-height:1.5; }
+  .tip .r.head .q, .tip .r.head .rq { font-weight:400; }
   .tip .s { margin-top:6px; padding-top:5px; border-top:1px solid var(--border);
             display:flex; justify-content:space-between; gap:12px; font-weight:700;
             font-variant-numeric:tabular-nums; }
@@ -194,6 +198,8 @@
     </h2>
     <div class="legend" id="legend"></div>
     <div id="chart"></div>
+    <h2 class="subchart"><span id="chartReqTitle">请求数</span></h2>
+    <div id="chartReq"></div>
   </section>
   <section>
     <h2>明细</h2>
@@ -354,6 +360,84 @@ function buildModelRoots(src, rng){
   }));
 }
 
+// Source view: keep one bar per source, but segment each bar by model. Cards/table/legend
+// stay source-level; only the chart gains the tool -> model breakdown.
+function shadeColor(hex, t){
+  if (!/^#[0-9a-f]{6}$/i.test(hex)) return hex;
+  const n = parseInt(hex.slice(1), 16);
+  const ch = [n>>16&255, n>>8&255, n&255].map(v => {
+    const target = t >= 0 ? 255 : 0;
+    return Math.round(v + (target - v) * Math.min(1, Math.abs(t)));
+  });
+  return '#' + ch.map(v => v.toString(16).padStart(2,'0')).join('');
+}
+
+function buildToolModelChart(rs, rng){
+  const pairDay = {};   // day -> pairKey -> {in, req}
+  const meta = {};      // pairKey -> {src, si, model, disp, in, req}
+  rs.forEach((r, si) => {
+    (r.days || []).forEach(d => {
+      if (d.day < rng[0] || d.day > rng[1]) return;
+      const add = (model, disp, v) => {
+        const key = 'tm:' + r.key + ':' + model;
+        const m = meta[key] || (meta[key] = {src:r.key, si, model, disp, in:0, req:0});
+        m.in += v.inTokens || 0; m.req += v.requests || 0;
+        const day = pairDay[d.day] || (pairDay[d.day] = {});
+        const p = day[key] || (day[key] = {in:0, req:0});
+        p.in += v.inTokens || 0; p.req += v.requests || 0;
+      };
+      const bm = d.byModel;
+      if (!bm || typeof bm !== 'object' || !Object.keys(bm).length) {
+        // old cache or a source without byModel: keep the day visible as one segment
+        add('unknown', '', {inTokens:d.inTokens, requests:d.requests});
+        return;
+      }
+      Object.keys(bm).forEach(raw => {
+        const v = bm[raw] || {};
+        const alias = normModel(raw);
+        const disp = modelName(alias);
+        add(normModel(disp), disp, v);
+      });
+    });
+  });
+  // Series in source order, largest model first within each source; same-source models
+  // share the source hue and differ by lightness, so the tool grouping stays readable.
+  const series = [];
+  rs.forEach((r, si) => {
+    const list = Object.keys(meta).filter(k => meta[k].si === si);
+    list.sort((a,b) => (meta[b].in - meta[a].in) || (meta[a].model < meta[b].model ? -1 : 1));
+    list.forEach((k, mi) => {
+      const m = meta[k];
+      const t = mi === 0 ? 0 : (mi % 2 ? 0.22 : -0.22) * Math.ceil(mi/2);
+      series.push({
+        key: k, src: r.key,
+        label: r.label.replace(/\s*\(.*\)$/, '') + ' · ' + (m.disp || m.model),
+        color: shadeColor(colorOf(r.key, si), t)
+      });
+    });
+  });
+  // Bucket the pair-day map exactly like buckets() does for the table.
+  const bmap = {};
+  for (const d of eachDay(rng[0], rng[1])) {
+    let k, label;
+    if (GRAN === 'day')      { k = d; label = d; }
+    else if (GRAN === 'week'){ const ws = weekStart(d); k = ws; label = ws + ' 起'; }
+    else                     { k = d.slice(0,7); label = d.slice(0,7); }
+    const b = bmap[k] = bmap[k] || {key:k, label};
+    const dm = pairDay[d] || {};
+    Object.keys(dm).forEach(pk => {
+      b[pk+'In'] = (b[pk+'In']||0) + dm[pk].in;
+      b[pk+'Req'] = (b[pk+'Req']||0) + dm[pk].req;
+    });
+  }
+  const rows = Object.values(bmap).sort((a,b)=>a.key<b.key?-1:1);
+  rows.forEach(b => series.forEach(s => {
+    b[s.key+'In'] = b[s.key+'In']||0;
+    b[s.key+'Req'] = b[s.key+'Req']||0;
+  }));
+  return {rows, series};
+}
+
 // Memoised on purpose: render() -> buckets() -> dayMap() -> rootsFiltered() is called at
 // least three times per paint, and an un-memoised re-sort can order two tied models
 // differently on each pass, making the chart contradict the table.
@@ -470,9 +554,11 @@ function render(){
       '<div class="s">' + why + '</div></div>';
     document.getElementById('legend').innerHTML = '';
     document.getElementById('chart').innerHTML = '';
+    document.getElementById('chartReq').innerHTML = '';
     hideTip();
     document.getElementById('tbl').innerHTML = '';
     document.getElementById('chartTitle').textContent = '输入 token';
+    document.getElementById('chartReqTitle').textContent = '请求数';
     return;
   }
 
@@ -504,9 +590,18 @@ function render(){
   cards.push(card('合计输入', fmtN(tot.in), '合计输出 '+fmtN(tot.out)+' · 请求 '+fmtN(tot.req), ''));
   document.getElementById('cards').innerHTML = cards.join('');
 
-  document.getElementById('chartTitle').textContent =
-    ({day:'每日',week:'每周（周一起）',month:'每月'})[GRAN] + '输入 token（'+fmtLbl(rng[0])+' ~ '+fmtLbl(rng[1])+'）';
-  drawChart(rows, rs);
+  const granLbl = ({day:'每日',week:'每周（周一起）',month:'每月'})[GRAN];
+  const rangeLbl = '（'+fmtLbl(rng[0])+' ~ '+fmtLbl(rng[1])+'）';
+  document.getElementById('chartTitle').textContent = granLbl + '输入 token' + rangeLbl;
+  document.getElementById('chartReqTitle').textContent = granLbl + '请求数' + rangeLbl;
+  let chartRows = rows, chartSeries = rs.map((r,i) => ({key:r.key, label:r.label, color:colorOf(r.key,i)}));
+  if (DIM === 'src') {
+    const nested = buildToolModelChart(rs, rng);
+    chartRows = nested.rows;
+    chartSeries = nested.series;
+  }
+  drawChart('chart', chartRows, chartSeries, 'In', 360, DIM === 'src');
+  drawChart('chartReq', chartRows, chartSeries, 'Req', 240, DIM === 'src');
 
   const z = v => v ? fmtN(v) : '—';
   const gLabel = {day:'日期(UTC)', week:'周（周一）', month:'月'}[GRAN];
@@ -529,6 +624,7 @@ function render(){
   document.getElementById('tbl').innerHTML = html;
 
   const fnItems = [
+    '柱状图分两张：上为输入 token、下为请求数；按来源时每根柱子按模型分段（同一来源用同色系深浅），悬浮可看每个工具下的具体模型和请求数。',
     '日期一律按 UTC 日切分（北京时间比 UTC 早 8 小时，跨天会落到前一日）。',
     'Qoder CLI：新转录含真实 usage，按 message.id 去重后直接采用（input_tokens 已含缓存）；'
       + 'usage 为 0 的老转录才按字符估算——每个请求按重发全部前文上下文计，单请求按窗口封顶'
@@ -554,7 +650,9 @@ function render(){
     'Qoder 内置模型在转录里只记选择器别名，产品名由 ~/.qoder*/.auth/dynamic-texts.json 映射（qfmodel → Qwen3.8-Flash）；'
       + 'AtomCode 的 glm5.3-flash 也并入 GLM-5.3-Flash；所有别名以浅色标在旁边。',
     '按模型的合计由各来源每天的 byModel 逐项相加；字符估算的部分按模型分别取整，与「按来源」合计可能相差几个 token。',
-    'efficient / lite / ultimate / auto 是档位不是某个模型，还原不出具体型号。',
+    'efficient / lite / ultimate 是档位不是某个模型，还原不出具体型号。',
+    'auto 在 Qoder CLI 1.1.84 起的转录里可由人类提示的 businessModelKey 还原（自动路由到 qfmodel / dfmodel）；'
+      + '只有更早真正选 Auto 档位的记录仍显示 Auto。',
     '缺失或 <synthetic> 归入 unknown（固定灰色）；所有模型逐一列出（按输入 token 降序），不再合并成「其他」。',
     '成本仅 cc-switch 覆盖的模型有真实 USD，其它来源不估价。',
   );
@@ -564,17 +662,25 @@ function render(){
 
 const tipEl = document.getElementById('tip');
 let tipOn = -1;      // column index the tooltip/highlight currently belongs to
-let TIPCOLS = [];    // one tooltip HTML per column, rebuilt on every chart paint
+let tipChart = '';   // which chart the current tooltip belongs to ('chart' / 'chartReq')
+let TIPCOLS = {};    // elId -> one tooltip HTML per column, rebuilt on every chart paint
 
-function drawChart(rows, rs){
-  const W = 1300, H = 360, padL = 58, padB = 48, padT = 12, padR = 12;
+function drawChart(elId, rows, series, metric, H, nested){
+  const W = 1300, padL = 58, padB = 48, padT = 12, padR = 12;
   const iw = W - padL - padR, ih = H - padT - padB;
-  const max = Math.max.apply(null, rows.map(r => rs.reduce((s,x)=>s+(r[x.key+'In']||0),0)).concat([1]));
+  const val = (r, s) => r[s.key+metric] || 0;
+  const max = Math.max.apply(null, rows.map(r => series.reduce((s,x)=>s+val(r,x),0)).concat([1]));
   // The old fixed 1e8 quantum flattened the model view, where one model's daily peak can be
   // 1e6 and would render as a 1%-tall bar. Scale the step to the data instead.
   const rawStep = (max || 1) / 4;
-  const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
-  const yMax = Math.ceil(rawStep / mag) * mag * 4;
+  let yMax;
+  if (metric === 'Req') {
+    // request counts are integers; don't put 0.3 / 0.6 on the axis
+    yMax = Math.max(1, Math.ceil(rawStep)) * 4;
+  } else {
+    const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+    yMax = Math.ceil(rawStep / mag) * mag * 4;
+  }
   const slot = iw / rows.length, bw = Math.min(slot * 0.72, 40), gap = slot - bw;
   let g = '';
   for (let i = 0; i <= 4; i++) {
@@ -586,35 +692,41 @@ function drawChart(rows, rs){
   const tips = [];
   rows.forEach((r, i) => {
     const x = padL + slot*i + gap/2;
-    const total = rs.reduce((s,rr)=>s+(r[rr.key+'In']||0),0);
-    const totalReq = rs.reduce((s,rr)=>s+(r[rr.key+'Req']||0),0);
+    const total = series.reduce((s,x)=>s+val(r,x),0);
+    const totalReq = series.reduce((s,x)=>s+(r[x.key+'Req']||0),0);
     if (total === 0) {
       g += '<line class="stub" x1="'+x+'" y1="'+(padT+ih)+'" x2="'+(x+bw)+'" y2="'+(padT+ih)+'"/>';
     } else {
-      let acc = 0, ci = 0;
-      rs.forEach(rr => {
-        const v = r[rr.key+'In']||0;
-        if (v <= 0) { ci++; return; }
+      let acc = 0;
+      series.forEach(s => {
+        const v = val(r,s);
+        if (v <= 0) return;
         const h = ih * v / yMax;
         const yTop = padT + ih - ih * (acc + v) / yMax;
-        g += '<rect class="seg" x="'+x+'" y="'+yTop+'" width="'+bw+'" height="'+h+'" fill="'+colorOf(rr.key,ci++)+'" rx="1"/>';
+        g += '<rect class="seg" x="'+x+'" y="'+yTop+'" width="'+bw+'" height="'+h+'" fill="'+s.color+'" rx="1"/>';
         acc += v;
       });
     }
     // hover band spans the whole plot height, so a 2px bar is as easy to hit as a tall one
     g += '<rect class="hit" data-i="'+i+'" x="'+x+'" y="'+padT+'" width="'+bw+'" height="'+ih+'"/>';
-    const items = rs.map((rr, j) => ({label:rr.label, color:colorOf(rr.key, j), v:r[rr.key+'In']||0}))
-                    .filter(o => o.v > 0).sort((a,b) => b.v - a.v);
+    let items = series.map(s => ({label:s.label, color:s.color,
+                                  v:val(r,s), req:r[s.key+'Req']||0}))
+                    .filter(o => o.v > 0);
+    if (!nested) items = items.sort((a,b) => b.v - a.v);
     tips.push('<div class="h">'+esc(r.label)+'</div>' + (items.length
-      ? items.map(o => '<div class="r"><span class="dot" style="background:'+o.color+'"></span>'+
-                       '<span class="n">'+esc(o.label)+'</span><span class="q">'+fmtN(o.v)+'</span></div>').join('') +
-        '<div class="s"><span>合计 '+fmtN(total)+'</span><span>请求 '+fmtN(totalReq)+'</span></div>'
+      ? '<div class="r head"><span class="n"></span><span class="q">'+(metric==='Req'?'请求':'输入')+'</span>'
+          + (metric==='Req' ? '' : '<span class="rq">请求</span>') + '</div>'
+        + items.map(o => '<div class="r"><span class="dot" style="background:'+o.color+'"></span>'+
+                       '<span class="n">'+esc(o.label)+'</span><span class="q">'+fmtN(o.v)+'</span>'+
+                       (metric==='Req' ? '' : '<span class="rq">'+fmtN(o.req)+'</span>')+'</div>').join('') +
+        '<div class="s"><span>合计 '+fmtN(total)+'</span>'
+          + (metric==='Req' ? '' : '<span>请求 '+fmtN(totalReq)+'</span>')+'</div>'
       : '<div class="r e">无数据</div>'));
     if (i % tickEvery === 0)
       g += '<text x="'+(x+bw/2)+'" y="'+(H-padB+14)+'" text-anchor="middle">'+(GRAN==='day'? r.key.slice(5) : r.label)+'</text>';
   });
-  TIPCOLS = tips;
-  document.getElementById('chart').innerHTML =
+  TIPCOLS[elId] = tips;
+  document.getElementById(elId).innerHTML =
     '<svg viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="xMidYMid meet">'+g+'</svg>';
   hideTip();
 }
@@ -622,20 +734,21 @@ function drawChart(rows, rs){
 function hideTip(){
   tipEl.hidden = true;
   tipOn = -1;
-  const on = document.querySelector('#chart .hit.on');
-  if (on) on.classList.remove('on');
+  tipChart = '';
+  document.querySelectorAll('.hit.on').forEach(el => el.classList.remove('on'));
 }
 
-function showTip(i, ev){
-  if (i !== tipOn) {
-    if (!TIPCOLS[i]) { hideTip(); return; }
-    tipEl.innerHTML = TIPCOLS[i];
-    const prev = document.querySelector('#chart .hit.on');
-    if (prev) prev.classList.remove('on');
-    const hit = document.querySelector('#chart .hit[data-i="'+i+'"]');
+function showTip(elId, i, ev){
+  if (i !== tipOn || elId !== tipChart) {
+    const tips = TIPCOLS[elId] || [];
+    if (!tips[i]) { hideTip(); return; }
+    tipEl.innerHTML = tips[i];
+    document.querySelectorAll('.hit.on').forEach(el => el.classList.remove('on'));
+    const hit = document.querySelector('#'+elId+' .hit[data-i="'+i+'"]');
     if (hit) hit.classList.add('on');
     tipEl.hidden = false;
     tipOn = i;
+    tipChart = elId;
   }
   const box = tipEl.getBoundingClientRect();
   let x = ev.clientX + 16, y = ev.clientY + 16;
@@ -722,11 +835,14 @@ function drawCal(){
 
 // ---- events ----
 // Delegated: the hit bands are rebuilt on every repaint, so no per-element listeners.
-document.getElementById('chart').addEventListener('mousemove', e => {
-  const hit = e.target.closest ? e.target.closest('.hit') : null;
-  if (hit) showTip(+hit.dataset.i, e); else hideTip();
+['chart','chartReq'].forEach(id => {
+  const el = document.getElementById(id);
+  el.addEventListener('mousemove', e => {
+    const hit = e.target.closest ? e.target.closest('.hit') : null;
+    if (hit) showTip(id, +hit.dataset.i, e); else hideTip();
+  });
+  el.addEventListener('mouseleave', hideTip);
 });
-document.getElementById('chart').addEventListener('mouseleave', hideTip);
 document.getElementById('themeBtn').addEventListener('click', () => {
   const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
   document.documentElement.dataset.theme = next;
